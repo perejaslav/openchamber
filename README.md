@@ -1,109 +1,114 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="docs/references/badges/openchamber-logo-dark.svg"><img src="docs/references/badges/openchamber-logo-light.svg" width="32" height="32" align="absmiddle" /></picture> OpenChamber
 
+> **Русская версия.** Это личный форк [openchamber/openchamber](https://github.com/openchamber/openchamber)
+> с русской локализацией интерфейса и документации. Всё остальное — оригинальный проект.
+> Оригинальный README на английском: [`git show upstream/main:README.md`](https://github.com/openchamber/openchamber/blob/main/README.md).
+> Как обновляться и собирать — см. [FORK.md](FORK.md).
+
 [![GitHub stars](https://img.shields.io/github/stars/openchamber/openchamber?style=flat&labelColor=100F0F&color=66800B)](https://github.com/openchamber/openchamber/stargazers)
 [![GitHub release](https://img.shields.io/github/v/release/openchamber/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/openchamber/openchamber/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-join.svg?style=flat&labelColor=100F0F&color=8B7EC8&logo=discord&logoColor=FFFCF0)](https://discord.gg/ZYRSdnwwKA)
 [![Support the project](https://img.shields.io/badge/Support-Project-black?style=flat&labelColor=100F0F&color=EC8B49&logo=patreon&logoColor=FFFCF0)](https://www.patreon.com/openchamber)
 
-<a href="https://www.blacksmith.sh/"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/references/badges/blacksmith-dark.svg"><img src="docs/references/badges/blacksmith-light.svg" height="28" alt="CI powered by Blacksmith" /></picture></a>
+<a href="https://www.blacksmith.sh/"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/references/badges/blacksmith-dark.svg"><img src="docs/references/badges/blacksmith-light.svg" height="28" alt="CI на базе Blacksmith" /></picture></a>
 
-## Run agent work. Keep control. Ship from anywhere.
+## Запускайте работу агентов. Держите всё под контролем. Выпускайте откуда угодно.
 
-**OpenChamber is an open-source workspace for running and reviewing AI coding work on desktop, web, VS Code, and mobile.**
+**OpenChamber — это рабочая область с открытым исходным кодом для запуска и проверки работы AI-агентов на десктопе, в вебе, VS Code и на мобильных.**
 
-Start agent work, see what changed, and take it through review and release. Your projects and sessions remain available when you switch devices or step away.
+Запустите работу агента, посмотрите, что изменилось, и проведите её через ревью и выпуск. Ваши проекты и сессии остаются доступны, когда вы меняете устройство или отходите от дел.
 
 ![OpenChamber Chat](docs/references/chat_example.png)
 
 <details>
-<summary>More screenshots</summary>
+<summary>Больше скриншотов</summary>
 
 ![VS Code Extension](packages/vscode/extension.jpg)
 
 <p>
-<img src="docs/references/pwa_chat_example.png" width="45%" alt="OpenChamber PWA chat">
-<img src="docs/references/pwa_diff_example.png" width="45%" alt="OpenChamber PWA diff review">
+<img src="docs/references/pwa_chat_example.png" width="45%" alt="Чат OpenChamber PWA">
+<img src="docs/references/pwa_diff_example.png" width="45%" alt="Просмотр диффов OpenChamber PWA">
 </p>
 
 </details>
 
-## What you can do with OpenChamber
+## Что можно делать в OpenChamber
 
-### Goals that continue on their own
+### Цели, которые продолжаются сами
 
-Give a session a finish line with **Session Goals**. OpenChamber checks the result after every turn and keeps the agent working until it completes the goal, gets blocked, or reaches the limit you set. It can continue after you close the app.
+Задайте сессии финишную прямую с помощью **Цели сессии**. OpenChamber проверяет результат после каждого хода и держит агента в работе, пока тот не завершит цель, не упрётся в блокировку или не достигнет заданного вами лимита. Работа может продолжаться и после того, как вы закроете приложение.
 
-### Compare and combine runs
+### Сравнивайте и объединяйте запуски
 
-Use **Multi-run** to give the same task to up to five models, each in its own session and optionally its own worktree. See what each one actually built, choose the best result, or use **Fusion** to combine the strongest parts into a new session.
+Используйте **Multi-run**, чтобы отдать одну и ту же задачу до пяти моделям — каждая в своей сессии и, при желании, в своём worktree. Посмотрите, что на самом деле построила каждая, выберите лучший результат или примените **Объединение**, чтобы собрать самые сильные части в новую сессию.
 
-### Guided changes walkthroughs
+### Обзорные туры по изменениям
 
-**Changes Walkthrough** turns a large diff into an AI-guided tour of the change. It groups related edits into steps, puts them in the order the change makes sense, and explains how the pieces fit together.
+**Обзорный тур по изменениям** превращает большой дифф в проведённый ИИ обзор изменения. Он собирает связанные правки в шаги, выстраивает их в том порядке, в котором изменение обретает смысл, и объясняет, как всё складывается воедино.
 
-### Inspect a running app
+### Осматривайте запущенное приложение
 
-Open your app beside the conversation with **Preview**. Point at an element to send the agent its screenshot, styles, position, and browser errors. No more trying to explain "this thing here." The desktop app can do the same with any web page in its built-in browser.
+Откройте приложение рядом с чатом с помощью **Preview**. Укажите на элемент, чтобы отправить агенту его скриншот, стили, положение и ошибки браузера. Больше не нужно объяснять «вот эту штуку вот здесь». Десктопное приложение умеет то же самое с любой веб-страницей в своём встроенном браузере.
 
-### GitHub context from issue to pull request
+### Контекст GitHub: от проблемы до pull request
 
-Start a session from a GitHub issue or pull request with its context attached. Send failed checks or review comments back to the agent, then update or merge the pull request from OpenChamber.
+Начните сессию из проблемы или pull request на GitHub с прикреплённым контекстом. Отправляйте агенту упавшие проверки или комментарии ревью, а затем обновляйте pull request или выполняйте слияние прямо из OpenChamber.
 
-### Continue on another device
+### Продолжайте на другом устройстве
 
-Open the same projects and sessions from Desktop, Web/PWA, VS Code, iOS, or Android. Check progress, answer questions, review changes, and reattach to a running terminal.
+Открывайте те же проекты и сессии с десктопа, из веба/PWA, VS Code, iOS или Android. Проверяйте прогресс, отвечайте на вопросы, просматривайте изменения и подключайтесь заново к работающему терминалу.
 
-### Private remote access
+### Приватный удалённый доступ
 
-Pair a device with a one-time QR code and connect through **Private Relay** without opening ports or exposing a public server. The connection is end-to-end encrypted and can be revoked at any time. Direct connections, LAN/VPN access, Cloudflare/Ngrok tunnels, and SSH are also supported.
+Спарьте устройство по одноразовому QR-коду и подключайтесь через **Private Relay**, не открывая порты и не выставляя публичный сервер в интернет. Соединение защищено сквозным шифрованием, и его можно отозвать в любой момент. Также поддерживаются прямые подключения, доступ через локальную сеть/VPN, туннели Cloudflare/Ngrok и SSH.
 
-### Track work across projects
+### Следите за работой по всем проектам
 
-See which sessions are working, waiting, finished, or failed, along with approvals, scheduled tasks, provider limits, token use, and costs. Organize sessions into folders and keep notes, todos, and reusable project actions nearby.
+Смотрите, какие сессии работают, ждут, завершились или упали, а рядом — подтверждения, запланированные задачи, лимиты провайдеров, использование токенов и стоимость. Раскладывайте сессии по папкам и держите под рукой заметки, задачи и переиспользуемые действия проекта.
 
-### Schedule recurring work
+### Планируйте повторяющуюся работу
 
-Run a prompt once, daily, weekly, or on a cron schedule. Scheduled tasks can use Session Goals, so they continue toward an outcome instead of stopping after one response.
+Запускайте промпт один раз, ежедневно, еженедельно или по расписанию cron. Запланированные задачи могут использовать цели сессии, поэтому движутся к результату, а не останавливаются после одного ответа.
 
-## Use it where you work
+## Используйте там, где работаете
 
-| Surface | Role |
+| Платформа | Роль |
 | --- | --- |
-| **Desktop** | The complete workspace for macOS, Windows, and Linux, with multiple windows, Mini Chat, remote machines, SSH, and native notifications |
-| **Web / PWA** | Open your workspace in a browser, install it as an app, and stay up to date through background notifications |
-| **VS Code** | Keep sessions beside your code, send selections to the agent, open results in the editor, and compare parallel runs |
-| **iOS / Android** | Review and steer work away from your desk, receive completion alerts, and use the terminal with touch controls |
-| **CLI / Server** | Run OpenChamber on a workstation or server, schedule work, manage remote access, and keep it available after login |
+| **Десктоп** | Полноценная рабочая область для macOS, Windows и Linux: несколько окон, Мини-чат, удалённые машины, SSH и системные уведомления |
+| **Веб / PWA** | Открывайте рабочую область в браузере, установите её как приложение и оставайтесь в курсе благодаря фоновым уведомлениям |
+| **VS Code** | Держите сессии рядом с кодом, отправляйте выделенное агенту, открывайте результаты в редакторе и сравнивайте параллельные запуски |
+| **iOS / Android** | Проверяйте работу и управляйте ею вдали от рабочего стола, получайте оповещения о завершении и пользуйтесь терминалом с сенсорным управлением |
+| **CLI / Сервер** | Запускайте OpenChamber на рабочей станции или сервере, планируйте работу, управляйте удалённым доступом и держите его доступным после входа в систему |
 
-## Quick start
+## Быстрый старт
 
-### Desktop for macOS, Windows, and Linux
+### Десктоп для macOS, Windows и Linux
 
-Download the latest release from [GitHub Releases](https://github.com/openchamber/openchamber/releases/latest). Desktop bundles the matching OpenCode CLI, so no separate OpenCode installation is required.
+Скачайте последний релиз со страницы [GitHub Releases](https://github.com/openchamber/openchamber/releases/latest). Десктоп включает в себя подходящий OpenCode CLI, поэтому отдельно устанавливать OpenCode не нужно.
 
-Linux releases are available as x86_64 and ARM64 AppImages. Make the downloaded AppImage executable and keep it in a writable location for in-app updates:
+Релизы для Linux доступны в виде AppImage для x86_64 и ARM64. Сделайте скачанный AppImage исполняемым и держите его в папке с правом записи — так обновления будут работать изнутри приложения:
 
 ```bash
 chmod +x OpenChamber-*.AppImage
 ./OpenChamber-*.AppImage
 ```
 
-Linux AppImages require FUSE (`libfuse.so.2`). Without FUSE, run with `APPIMAGE_EXTRACT_AND_RUN=1`.
+Для AppImage на Linux нужен FUSE (`libfuse.so.2`). Без FUSE запускайте с `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 ### VS Code
 
-Install [OpenChamber from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=fedaykindev.openchamber), or search for "OpenChamber" in Extensions.
+Установите [OpenChamber из Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=fedaykindev.openchamber) или найдите «OpenChamber» в разделе расширений.
 
-### CLI for Web and PWA
+### CLI для веба и PWA
 
-Requires Node.js 22+. CLI/Web and VS Code use your installed [OpenCode CLI](https://opencode.ai).
+Требуется Node.js 22+. CLI/веб и VS Code используют установленный у вас [OpenCode CLI](https://opencode.ai).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/openchamber/openchamber/main/scripts/install.sh | bash
 openchamber --ui-password be-creative-here
 ```
 
-Common operations:
+Частые операции:
 
 ```bash
 openchamber status
@@ -115,51 +120,51 @@ openchamber stop
 openchamber update
 ```
 
-OpenChamber binds to localhost by default. Use `--lan` only on a trusted network and protect browser access with `--ui-password`.
+По умолчанию OpenChamber слушает localhost. Используйте `--lan` только в доверенной сети и защищайте доступ из браузера с помощью `--ui-password`.
 
-## Guides
+## Руководства
 
-Go deeper with the OpenChamber guides:
+Изучите OpenChamber глубже с помощью руководств:
 
-- [Quick start](packages/docs/content/docs/quickstart.mdx)
-- [Installation](packages/docs/content/docs/install.mdx)
-- [Connect devices](packages/docs/content/docs/connect-devices.mdx)
+- [Быстрый старт](packages/docs/content/docs/quickstart.mdx)
+- [Установка](packages/docs/content/docs/install.mdx)
+- [Подключение устройств](packages/docs/content/docs/connect-devices.mdx)
 - [Private Relay](packages/docs/content/docs/private-relay.mdx)
 - [Multi-run](packages/docs/content/docs/multi-run.mdx)
-- [Session Goals](packages/docs/content/docs/session-goals.mdx)
-- [Changes Walkthrough](packages/docs/content/docs/walkthrough.mdx)
-- [Preview and dev servers](packages/docs/content/docs/preview.mdx)
-- [GitHub workflows](packages/docs/content/docs/github.mdx)
-- [Mobile](packages/docs/content/docs/mobile.mdx)
-- [Security](packages/docs/content/docs/security.mdx)
-- [Troubleshooting](packages/docs/content/docs/troubleshooting.mdx)
+- [Цель сессии](packages/docs/content/docs/session-goals.mdx)
+- [Обзорный тур по изменениям](packages/docs/content/docs/walkthrough.mdx)
+- [Preview и dev-серверы](packages/docs/content/docs/preview.mdx)
+- [Рабочие процессы GitHub](packages/docs/content/docs/github.mdx)
+- [Мобильные приложения](packages/docs/content/docs/mobile.mdx)
+- [Безопасность](packages/docs/content/docs/security.mdx)
+- [Устранение неполадок](packages/docs/content/docs/troubleshooting.mdx)
 
-For self-hosting details, see the [reverse proxy guide](docs/REVERSE_PROXY.md). For custom theme authoring, see the [custom themes guide](docs/CUSTOM_THEMES.md).
+О деталях самостоятельного хостинга читайте в [руководстве по обратному прокси](docs/REVERSE_PROXY.md). О создании собственных тем — в [руководстве по пользовательским темам](docs/CUSTOM_THEMES.md).
 
-## Why OpenCode?
+## Почему OpenCode?
 
-OpenChamber uses [OpenCode](https://opencode.ai) to run coding agents. We chose it because it is open source, has a solid API, and is easy to extend.
+OpenChamber использует [OpenCode](https://opencode.ai) для запуска агентов-программистов. Мы выбрали его, потому что он с открытым исходным кодом, имеет надёжный API и легко расширяется.
 
-OpenChamber handles the rest of the workflow. You can decide what to try, keep the agent on track, review the result, connect from another device, and ship the change.
+Всё остальное в рабочем процессе OpenChamber берёт на себя. Вы решаете, что попробовать, держите агента в русле, проверяете результат, подключаетесь с другого устройства и выпускаете изменение.
 
-OpenChamber is an independent project and is not affiliated with the OpenCode team.
+OpenChamber — независимый проект и не связан с командой OpenCode.
 
-## Contributing
+## Участие в проекте
 
-Bug fixes and small improvements are welcome as PRs. Features and behavior changes start in an [Ideas discussion](https://github.com/openchamber/openchamber/discussions/categories/ideas) so we agree on the product side before anyone writes code. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR; it has the setup, the review contract, and what happens to large unplanned PRs. Documentation authoring guidance lives in [`packages/docs`](packages/docs/README.md).
+Исправления ошибок и небольшие улучшения приветствуются в виде PR. Новые возможности и изменения поведения начинаются с [обсуждения идей](https://github.com/openchamber/openchamber/discussions/categories/ideas), чтобы мы договорились о продукте до того, как кто-то начнёт писать код. Прочитайте [CONTRIBUTING.md](./CONTRIBUTING.md) перед открытием PR: там есть настройка, правила ревью и то, что происходит с большими незапланированными PR. Руководство по написанию документации — в [`packages/docs`](packages/docs/README.md).
 
-Bugs go to [issues](https://github.com/openchamber/openchamber/issues/new/choose). Questions go to [Q&A discussions](https://github.com/openchamber/openchamber/discussions/categories/q-a).
+Об ошибках сообщайте в [issues](https://github.com/openchamber/openchamber/issues/new/choose). Вопросы задавайте в [обсуждениях Q&A](https://github.com/openchamber/openchamber/discussions/categories/q-a).
 
-## Acknowledgments
+## Благодарности
 
-Special thanks to:
+Особая благодарность:
 
-- [OpenCode](https://opencode.ai) for the API and open-source architecture OpenChamber builds on
-- [Pierre](https://pierrejs-docs.vercel.app/) for the diff viewer and syntax highlighting
-- The [T3 Code](https://github.com/pingdotgg/t3code) team for their browser adapter for [libghostty-vt](https://github.com/ghostty-org/ghostty), which our terminal is built on
-- [Yulia Ivashko](https://github.com/yulia-ivashko), who built the firework celebration that plays on every successful push
-- Everyone who contributed code, reported bugs, or shared ideas
+- [OpenCode](https://opencode.ai) — за API и открытую архитектуру, на которых строится OpenChamber
+- [Pierre](https://pierrejs-docs.vercel.app/) — за просмотрщик диффов и подсветку синтаксиса
+- Команде [T3 Code](https://github.com/pingdotgg/t3code) — за браузерный адаптер для [libghostty-vt](https://github.com/ghostty-org/ghostty), на котором построен наш терминал
+- [Yulia Ivashko](https://github.com/yulia-ivashko) — за праздничный фейерверк, который играет при каждом успешном push
+- Всем, кто писал код, сообщал об ошибках или делился идеями
 
-## License
+## Лицензия
 
 MIT

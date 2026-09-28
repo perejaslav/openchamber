@@ -1,32 +1,32 @@
-# Security Policy
+# Политика безопасности
 
-## Reporting a Vulnerability
+## Сообщение об уязвимости
 
-If you discover a security vulnerability in OpenChamber, please report it responsibly.
+Если вы обнаружили уязвимость в системе безопасности OpenChamber, пожалуйста, сообщите о ней ответственно.
 
 **Email:** [security@openchamber.dev](mailto:security@openchamber.dev)
 
-Please include:
-- Description of the vulnerability
-- Steps to reproduce
-- Affected version(s)
-- Potential impact
+Пожалуйста, укажите:
+- Описание уязвимости
+- Шаги воспроизведения
+- Затронутые версии
+- Потенциальное влияние
 
-I'll acknowledge receipt within 48 hours and aim to provide a fix or mitigation as quickly as possible.
+Я подтвержу получение в течение 48 часов и постараюсь как можно скорее предоставить исправление или меры защиты.
 
-**Please do not open public GitHub issues for security vulnerabilities.**
+**Пожалуйста, не открывайте публичные issue в GitHub по вопросам уязвимостей безопасности.**
 
-## Scope
+## Область действия
 
-OpenChamber handles sensitive context including:
-- UI authentication (password-protected sessions, JWT tokens)
-- Cloudflare tunnel access (remote connectivity)
-- Terminal access (PTY sessions)
-- Git credentials and SSH keys
-- File system operations
+OpenChamber работает с конфиденциальными данными, включая:
+- Аутентификация интерфейса (сессии, защищённые паролем, токены JWT)
+- Доступ через туннель Cloudflare (удалённое подключение)
+- Доступ к терминалу (сессии PTY)
+- Учётные данные Git и ключи SSH
+- Операции с файловой системой
 
-Security reports related to any of these areas are especially appreciated.
+Мы особенно признательны за сообщения о безопасности, касающиеся любой из этих областей.
 
-## Supported Versions
+## Поддерживаемые версии
 
-Security fixes are applied to the latest release. There is no LTS or backport policy at this time.
+Исправления безопасности вносятся в последний выпуск. Политики LTS или обратного переноса исправлений на данный момент нет.

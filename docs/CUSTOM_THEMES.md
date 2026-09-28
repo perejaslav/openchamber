@@ -1,34 +1,34 @@
-# Custom themes
+# Пользовательские темы
 
-Open **Settings → Appearance → Import VS Code theme** to search Open VSX.
-Choose a package, compare the variant previews, and select the variants to import.
-Batch import keeps your current theme active. Open VSX is a separate catalog;
-themes published only in Microsoft Marketplace may not appear.
+Откройте **Настройки → Оформление → Импортировать тему VS Code**, чтобы выполнить поиск в Open VSX.
+Выберите пакет, сравните предпросмотр вариантов и отметьте варианты для импорта.
+Пакетный импорт оставляет текущую тему активной. Open VSX — отдельный каталог;
+темы, опубликованные только в Microsoft Marketplace, могут не отобразиться.
 
-**Choose JSON file** imports a self-contained `.json` or `.jsonc` file. Desktop
-starts its native picker in the local `~/.vscode/extensions` folder when it exists,
-even when connected to a remote server. Browsers and mobile use their own picker.
-UI colors use the same
-surface mapping as the VS Code runtime adapter; general TextMate and semantic
-token colors populate the syntax palette, and diff colors remain separate.
-Regular imports adapt generic border intensity to OpenChamber's standard light
-and dark palettes while retaining the source hue. High-contrast themes keep
-their authored borders.
-The theme is saved on the connected server and selected in its light/dark mode.
-Package imports resolve JSON `include` and token files inside the downloaded VSIX.
-For individual files with those references, export the active theme with
-**Developer: Generate Color Theme From Current Settings** in VS Code first.
+**Выбрать файл JSON** импортирует автономный файл `.json` или `.jsonc`. Десктопное
+приложение открывает свой системный диалог выбора в локальной папке `~/.vscode/extensions`, если она существует,
+даже при подключении к удалённому серверу. Браузеры и мобильные устройства используют собственный выбор файлов.
+Цвета интерфейса используют то же
+сопоставление поверхностей, что и адаптер среды выполнения VS Code; цвета обычных токенов TextMate и семантических
+токенов заполняют палитру синтаксиса, а цвета диффов остаются отдельными.
+Обычный импорт подстраивает общую интенсивность границ под стандартные светлую
+и тёмную палитры OpenChamber, сохраняя исходный оттенок. Высококонтрастные темы сохраняют
+заданные автором границы.
+Тема сохраняется на подключённом сервере и выбирается в его светлом или тёмном режиме.
+Импорт пакетов разрешает JSON `include` и файлы токенов внутри загруженного VSIX.
+Для отдельных файлов с такими ссылками сначала экспортируйте активную тему командой
+**Developer: Generate Color Theme From Current Settings** в VS Code.
 
-Delete a custom theme using the trash icon beside it in the theme dropdown.
-This includes valid themes you added directly to the server's `themes` folder.
-Deleting a selected theme restores the standard OpenChamber theme for that mode.
-Built-in themes cannot be deleted. Delete and reimport a theme to update it.
+Удалить пользовательскую тему можно значком корзины рядом с ней в раскрывающемся списке тем.
+Это касается и допустимых тем, которые вы добавили напрямую в папку `themes` на сервере.
+Удаление выбранной темы возвращает стандартную тему OpenChamber для этого режима.
+Встроенные темы удалить нельзя. Чтобы обновить тему, удалите её и импортируйте заново.
 
-Save a JSON file in `~/.config/openchamber/themes/`, then open **Settings → Theme → Reload themes** and select it. A custom OpenChamber data directory uses its own `themes` folder.
+Сохраните JSON-файл в `~/.config/openchamber/themes/`, затем откройте **Настройки → Тема → Перезагрузить темы** и выберите её. Пользовательский каталог данных OpenChamber использует собственную папку `themes`.
 
-## Start with the base colors
+## Начните с базовых цветов
 
-This is a complete theme. OpenChamber supplies omitted states, foregrounds, syntax aliases and diff backgrounds.
+Это полная тема. OpenChamber сам заполняет пропущенные состояния, цвета переднего плана, псевдонимы синтаксиса и фоны диффов.
 
 ```json
 {
@@ -65,42 +65,42 @@ This is a complete theme. OpenChamber supplies omitted states, foregrounds, synt
 }
 ```
 
-Use hex or `rgb()`/`rgba()` colors for automatic contrast adjustment. Hex alpha is supported, such as `#ffffff20`. Surfaces can be opaque or translucent; there is no required alpha value.
+Используйте цвета в формате hex или `rgb()`/`rgba()` для автоматической подстройки контраста. Поддерживается hex-альфа, например `#ffffff20`. Поверхности могут быть непрозрачными или полупрозрачными; обязательного значения альфы нет.
 
-## Color roles
+## Цветовые роли
 
-- `surface.background` is the main canvas, `muted` is the secondary area, and `elevated` is for cards, inputs, dropdowns and dialogs. Components may adjust opacity while using the same role.
-- `surface.foreground` and `mutedForeground` are primary and secondary text. `surface.elevatedForeground` controls text in dialogs, menus, cards and fields; it defaults to `foreground`.
-- `primary.base` is the main action. `interactive.selection` is the selected state. They are independent.
-- Fields keep their elevated background during hover, with `interactive.hover` layered over it. Focus uses `interactive.focusRing`; separators use `interactive.border`. `surface.subtle` is a quiet background, not a hover or focus color.
-- Status colors represent feedback. Solid fills get a contrasting foreground; tinted buttons and alerts get separate computed text colors. Those computed colors are not extra authoring fields.
-- Syntax controls code in chat, files and diffs. It uses your palette rather than a fixed third-party highlighting theme.
+- `surface.background` — основной холст, `muted` — второстепенная область, а `elevated` — для карточек, полей ввода, раскрывающихся списков и диалогов. Компоненты могут менять непрозрачность, используя одну и ту же роль.
+- `surface.foreground` и `mutedForeground` — основной и второстепенный текст. `surface.elevatedForeground` управляет текстом в диалогах, меню, карточках и полях; по умолчанию он равен `foreground`.
+- `primary.base` — основное действие. `interactive.selection` — выбранное состояние. Они независимы.
+- Поля сохраняют свой приподнятый фон при наведении, а поверх него накладывается `interactive.hover`. Фокус использует `interactive.focusRing`; разделители — `interactive.border`. `surface.subtle` — это спокойный фон, а не цвет наведения или фокуса.
+- Цвета состояния передают обратную связь. Сплошные заливки получают контрастный цвет переднего плана; тонированные кнопки и оповещения получают отдельные вычисляемые цвета текста. Эти вычисляемые цвета не являются дополнительными полями для автора.
+- Синтаксис управляет кодом в чате, файлах и диффах. Он использует вашу палитру, а не фиксированную стороннюю тему подсветки.
 
-## Optional overrides
+## Необязательные переопределения
 
-Add an override only when the default relationship does not fit your palette.
+Добавляйте переопределение только тогда, когда связь по умолчанию не подходит вашей палитре.
 
-| Group | Optional fields |
+| Группа | Необязательные поля |
 |---|---|
 | `primary` | `foreground`, `hover`, `active`, `muted` |
 | `surface` | `elevatedForeground`, `overlay`, `subtle` |
 | `interactive` | `selection`, `selectionForeground`, `hover`, `active`, `borderHover`, `borderFocus`, `focus`, `focusRing`, `cursor` |
-| `status` | Each status accepts `Foreground`, `Background` and `Border` suffixes |
+| `status` | Каждый статус принимает суффиксы `Foreground`, `Background` и `Border` |
 | `pr` | `open`, `draft`, `blocked`, `merged`, `closed` |
-| `chat` | `userMessageBackground`, `divider`, legacy `background` used as the inline-code background fallback |
+| `chat` | `userMessageBackground`, `divider`, устаревший `background`, используемый как запасной фон встроенного кода |
 | `markdown` | `link`, `linkHover`, `inlineCode`, `inlineCodeBackground`, `blockquote`, `blockquoteBorder`, `listMarker`, `bold`, `italic`, `strikethrough`, `hr` |
-| `tools` | `border`, `icon`, `title`, `description`; `edit` accepts `addedBackground`, `removedBackground`, `modifiedBackground`, `lineNumber` |
+| `tools` | `border`, `icon`, `title`, `description`; `edit` принимает `addedBackground`, `removedBackground`, `modifiedBackground`, `lineNumber` |
 
-`syntax.base.background` and `foreground` inherit the main canvas and text. Choose a code background close to `surface.background` for a subtle separation. Code surfaces render that color directly, without an automatic blend with the canvas. `syntax.highlights` accepts `diffAdded`, `diffRemoved`, `diffModified`, their `Background` variants, `lineNumber` and `lineNumberActive`. Diff backgrounds inherit their corresponding diff color at a low opacity.
+`syntax.base.background` и `foreground` наследуют основной холст и текст. Выберите фон кода, близкий к `surface.background`, для тонкого разделения. Поверхности кода отображают этот цвет напрямую, без автоматического смешивания с холстом. `syntax.highlights` принимает `diffAdded`, `diffRemoved`, `diffModified`, их варианты `Background`, `lineNumber` и `lineNumberActive`. Фоны диффов наследуют соответствующий цвет диффа при низкой непрозрачности.
 
-`syntax.tokens` contains exceptions to the shared mapping. `method` and `functionCall` inherit `base.function`; `class`, `struct` and `enum` inherit `className`, which defaults to `base.type`; `key` and `tagAttribute` inherit `variableProperty`. For distinct class and property colors, only those two overrides are needed.
+`syntax.tokens` содержит исключения из общего сопоставления. `method` и `functionCall` наследуют `base.function`; `class`, `struct` и `enum` наследуют `className`, который по умолчанию равен `base.type`; `key` и `tagAttribute` наследуют `variableProperty`. Для отдельных цветов классов и свойств нужны только эти два переопределения.
 
-Built-in JSON files in `packages/ui/src/lib/theme/themes/` show the supported overrides. The full syntax mapping is in `packages/ui/src/lib/theme/syntax.ts`.
+Встроенные JSON-файлы в `packages/ui/src/lib/theme/themes/` показывают поддерживаемые переопределения. Полное сопоставление синтаксиса находится в `packages/ui/src/lib/theme/syntax.ts`.
 
-Optional `config.fonts` accepts `sans`, `mono` and `heading`. Optional `config.transitions` accepts `fast`, `normal` and `slow` CSS transition values.
+Необязательный `config.fonts` принимает `sans`, `mono` и `heading`. Необязательный `config.transitions` принимает значения CSS-переходов `fast`, `normal` и `slow`.
 
-## Existing themes
+## Существующие темы
 
-Expanded theme files still load. Explicit supported overrides win over defaults. Retired fields, including Markdown heading colors, unused chat text colors and unused component sections, are ignored. Markdown headings in the file editor use the syntax foreground.
+Расширенные файлы тем по-прежнему загружаются. Явные поддерживаемые переопределения имеют приоритет над значениями по умолчанию. Устаревшие поля, включая цвета заголовков Markdown, неиспользуемые цвета текста чата и неиспользуемые разделы компонентов, игнорируются. Заголовки Markdown в редакторе файлов используют цвет переднего плана синтаксиса.
 
-Malformed themes are skipped without dropping valid siblings. A file must be no larger than 512 KiB. Duplicate IDs in the custom directory are skipped; a custom theme may override a built-in theme with the same ID.
+Некорректные темы пропускаются, не затрагивая корректные соседние. Размер файла не должен превышать 512 KiB. Дублирующиеся идентификаторы в пользовательской папке пропускаются; пользовательская тема может переопределить встроенную тему с тем же идентификатором.
