@@ -57,6 +57,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check the sync token is configured
+        # A dry run pushes nothing, so it does not need the PAT — that is what
+        # makes the whole pipeline testable before the token exists.
+        if: github.event.inputs.dry_run != 'true'
         env:
           SYNC_TOKEN: ${{ secrets.RU_SYNC_TOKEN }}
         run: |
@@ -69,7 +72,7 @@ jobs:
         with:
           ref: ru
           fetch-depth: 0
-          token: ${{ secrets.RU_SYNC_TOKEN }}
+          token: ${{ secrets.RU_SYNC_TOKEN || github.token }}
 
       - name: Setup bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
