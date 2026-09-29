@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { DEFAULT_LOCALE, type Locale } from './runtime';
+import { DEFAULT_LOCALE, detectInitialLocale, type Locale } from './runtime';
 import { resetI18nDictionaryCacheForTests, useI18nStore } from './store';
 
 const defaultDictionary = useI18nStore.getState().dictionary;
@@ -25,6 +25,24 @@ const waitForLocaleLoadToSettle = async (locale: Locale) => {
 
 describe('i18n store', () => {
   beforeEach(resetStore);
+
+  test('a fresh install starts in Russian and the Russian dictionary really loads', async () => {
+    expect(DEFAULT_LOCALE).toBe('ru');
+    expect(detectInitialLocale()).toBe('ru');
+
+    try {
+      useI18nStore.getState().setLocale('ru');
+
+      // Guards the dictionary-cache seeding: if the cache maps the default
+      // locale to the English dictionary, `setLocale('ru')` short-circuits and
+      // this stays null while the UI keeps rendering English.
+      expect(useI18nStore.getState().loadingLocale).toBe('ru');
+      await waitForLocaleLoadToSettle('ru');
+      expect(useI18nStore.getState().dictionary['common.language.russian']).toBe('Русский');
+    } finally {
+      resetStore();
+    }
+  });
 
   test('retries loading the active locale when it is not cached', async () => {
     useI18nStore.setState({

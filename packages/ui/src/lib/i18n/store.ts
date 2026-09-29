@@ -13,11 +13,16 @@ type I18nState = {
   setLocale: (locale: Locale) => void;
 };
 
-const dictionaries = new Map<Locale, I18nDictionary>([[DEFAULT_LOCALE, enDict]]);
+// The English dictionary is always the eager one — it is both the initial
+// dictionary and the fallback `formatMessage` uses for a missing key. Every
+// other locale, Russian included, is fetched lazily. Seeding this cache with
+// DEFAULT_LOCALE instead would map the default locale to the English
+// dictionary and `setLocale` would then short-circuit on that wrong entry.
+const dictionaries = new Map<Locale, I18nDictionary>([['en', enDict]]);
 
 export function resetI18nDictionaryCacheForTests(): void {
   dictionaries.clear();
-  dictionaries.set(DEFAULT_LOCALE, enDict);
+  dictionaries.set('en', enDict);
 }
 
 async function loadDictionary(locale: Locale): Promise<I18nDictionary> {
