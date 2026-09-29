@@ -1,0 +1,378 @@
+name: RU upstream sync
+
+# Keeps the Russian fork level with upstream without anyone watching: merge the
+# newest upstream release tag into `ru`, repair the translation gap, and hand
+# off to `fork-release.yml` by pushing a `ru-v<version>.<n>` tag.
+#
+# Two things about this file are load-bearing:
+#
+# 1. It also lives on `main`. GitHub only runs `schedule` and `workflow_dispatch`
+#    workflows that exist on the repository's default branch, and the default
+#    branch here is `main`, not `ru`.
+# 2. The branch and the tag are pushed with a PAT (`RU_SYNC_TOKEN`), never with
+#    GITHUB_TOKEN — a push authenticated with GITHUB_TOKEN does not trigger other
+#    workflows, and triggering `fork-release.yml` is the entire point.
+
+on:
+  schedule:
+    # Every 6 hours. GitHub may delay scheduled runs under load.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Upstream release tag to sync, e.g. v2.0.4. Empty: newest upstream v* tag.'
+        required: false
+        type: string
+      force:
+        description: 'Sync and release even if ru-v<version>.* already exists'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Do everything except push the branch, push the tag and create an issue'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+# Never let two syncs race for the `ru` branch.
+concurrency:
+  group: ru-upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/openchamber/openchamber.git
+  SYNC_BRANCH: ru
+  # Files the fork translates in place, so on conflict our side is the right one.
+  # Same list FORK.md gives a human.
+  OURS_ON_CONFLICT: README.md SECURITY.md docs/CUSTOM_THEMES.md
+  WORK_DIR: /tmp/ru-sync
+
+jobs:
+  sync:
+    name: Sync with upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the sync token is configured
+        # A dry run pushes nothing, so it does not need the PAT — that is what
+        # makes the whole pipeline testable before the token exists.
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          SYNC_TOKEN: ${{ secrets.RU_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::Секрет RU_SYNC_TOKEN не задан. Создайте PAT и добавьте его в секреты репозитория — см. FORK.md."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ru
+          fetch-depth: 0
+          token: ${{ secrets.RU_SYNC_TOKEN || github.token }}
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Configure git
+        run: |
+          git config user.name 'ru-sync'
+          git config user.email 'ru-sync@users.noreply.github.com'
+          mkdir -p "$WORK_DIR"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch upstream --tags --force
+
+      - name: Resolve the upstream tag and the release build number
+        id: target
+        env:
+          REQUESTED_REF: ${{ github.event.inputs.upstream_ref }}
+          FORCE: ${{ github.event.inputs.force }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          REF="${REQUESTED_REF:-}"
+          if [ -z "$REF" ]; then
+            REF="$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+          fi
+          if [ -z "$REF" ]; then
+            echo "::error::У апстрима не найден ни один релизный тег v<semver>."
+            exit 1
+          fi
+          if [ -z "$(git rev-parse -q --verify "refs/tags/${REF}^{commit}" || true)" ]; then
+            echo "::error::У апстрима нет тега ${REF}. Укажите тег вида v2.0.4."
+            exit 1
+          fi
+
+          VERSION="${REF#v}"
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Ref ${REF} — не релизный тег v<semver>. Синхронизация идёт только по релизам."
+            exit 1
+          fi
+
+          # Next build number for this upstream version, so a failed build is
+          # retried under a fresh tag instead of being stuck forever. Asked of
+          # the remote, not of local tags, so a tag that exists only on origin
+          # still counts.
+          LAST_BUILD=0
+          while IFS=$'\t' read -r _sha ref; do
+            case "$ref" in *'^{}'*) continue ;; esac
+            n="${ref##*.}"
+            case "$n" in ''|*[!0-9]*) continue ;; esac
+            [ "$n" -gt "$LAST_BUILD" ] && LAST_BUILD="$n"
+          done < <(git ls-remote --tags origin "refs/tags/ru-v${VERSION}.*")
+          BUILD=$((LAST_BUILD + 1))
+
+          RELEASES="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' 2>/dev/null || true)"
+          if printf '%s\n' "$RELEASES" | grep -qF "ru-v${VERSION}."; then
+            if [ "${FORCE:-false}" != "true" ]; then
+              echo "Релиз для ${VERSION} уже выпущен — синхронизировать нечего."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Релиз для ${VERSION} уже есть, но включён force — выпускаю ещё одну сборку."
+          fi
+
+          {
+            echo "ref=${REF}"
+            echo "version=${VERSION}"
+            echo "build=${BUILD}"
+            echo "release_tag=ru-v${VERSION}.${BUILD}"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Апстрим-тег: ${REF} → сборка ru-v${VERSION}.${BUILD}"
+
+      - name: Report nothing to do
+        if: steps.target.outputs.skip == 'true'
+        run: |
+          {
+            echo "### Автосинхронизация: делать нечего"
+            echo
+            echo "Релиз для версии \`${{ steps.target.outputs.version || '—' }}\` уже существует."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge the upstream tag into the sync branch
+        if: steps.target.outputs.skip != 'true'
+        env:
+          REF: ${{ steps.target.outputs.ref }}
+        run: |
+          set -euo pipefail
+
+          if git merge-base --is-ancestor "$REF" HEAD; then
+            echo "Ветка уже содержит ${REF} — мержить нечего."
+            exit 0
+          fi
+
+          if git merge --no-edit "$REF"; then
+            echo "Мерж ${REF} прошёл без конфликтов."
+            exit 0
+          fi
+
+          # Files the fork owns outright: a conflict here is resolved in our
+          # favour, exactly as FORK.md tells a human to do it.
+          for file in $OURS_ON_CONFLICT; do
+            if git ls-files -u -- "$file" | grep -q .; then
+              echo "Конфликт в ${file}: оставляю нашу версию."
+              git checkout --ours -- "$file"
+              git add -- "$file"
+            fi
+          done
+
+          # Upstream adds locales, the fork adds Russian in the same places, so
+          # this conflict set is expected on every release. The resolver handles
+          # the well-understood part; anything it does not recognise stays
+          # conflicted and stops the release.
+          if ! node scripts/ru/resolve-merge-conflicts.mjs > "$WORK_DIR/resolve.json" 2> "$WORK_DIR/resolve.log"; then
+            {
+              echo "Мерж ${REF}: часть конфликтов не удалось разрешить автоматически."
+              echo
+              echo '```'
+              cat "$WORK_DIR/resolve.log"
+              echo '```'
+            } > "$WORK_DIR/reason.txt"
+            echo "::error::Конфликты при мерже ${REF}."
+            cat "$WORK_DIR/reason.txt"
+            exit 1
+          fi
+          cat "$WORK_DIR/resolve.log"
+
+          git commit --no-edit
+          echo "Мерж ${REF} завершён после механического разрешения конфликтов."
+
+      - name: Install dependencies
+        if: steps.target.outputs.skip != 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Reconcile the Russian dictionaries with English
+        if: steps.target.outputs.skip != 'true'
+        run: |
+          set -uo pipefail
+
+          node scripts/ru/fill-missing-keys.mjs > "$WORK_DIR/fill.json" 2> "$WORK_DIR/fill.log"
+          FILL_STATUS=$?
+          cat "$WORK_DIR/fill.log"
+
+          if [ "$FILL_STATUS" -ne 0 ]; then
+            {
+              echo "Словари нельзя привести в порядок автоматически — нужна ручная правка."
+              echo
+              echo '```'
+              cat "$WORK_DIR/fill.log"
+              echo '```'
+            } > "$WORK_DIR/reason.txt"
+            echo "::error::Словари требуют ручной правки."
+            cat "$WORK_DIR/reason.txt"
+            exit 1
+          fi
+
+      - name: Run the locale tests and the type check
+        if: steps.target.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+
+          if ! bun test packages/ui/src/lib/i18n > "$WORK_DIR/tests.txt" 2>&1; then
+            {
+              echo "Тесты локали упали после мержа — релиз не выпускается."
+              echo
+              echo '```'
+              tail -40 "$WORK_DIR/tests.txt"
+              echo '```'
+            } > "$WORK_DIR/reason.txt"
+            echo "::error::Тесты локали упали."
+            cat "$WORK_DIR/tests.txt"
+            exit 1
+          fi
+          tail -6 "$WORK_DIR/tests.txt"
+
+          if ! bun run type-check > "$WORK_DIR/typecheck.txt" 2>&1; then
+            {
+              echo "Типы не сходятся после мержа — релиз не выпускается."
+              echo
+              echo '```'
+              tail -40 "$WORK_DIR/typecheck.txt"
+              echo '```'
+            } > "$WORK_DIR/reason.txt"
+            echo "::error::type-check упал."
+            cat "$WORK_DIR/typecheck.txt"
+            exit 1
+          fi
+          tail -8 "$WORK_DIR/typecheck.txt"
+
+      - name: Push the branch and the release tag
+        if: steps.target.outputs.skip != 'true'
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          RELEASE_TAG: ${{ steps.target.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "Dry run: ветка и тег ${RELEASE_TAG} не пушатся."
+            exit 0
+          fi
+
+          git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+          echo "Тег ${RELEASE_TAG} отправлен — запускается релизный workflow."
+
+      - name: Write the run summary
+        if: steps.target.outputs.skip != 'true' && success()
+        env:
+          REF: ${{ steps.target.outputs.ref }}
+          RELEASE_TAG: ${{ steps.target.outputs.release_tag }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### Автосинхронизация: ${REF}"
+            echo
+            echo "- Сборка: \`${RELEASE_TAG}\`"
+            node -e '
+              const r = require(process.env.WORK_DIR + "/fill.json");
+              console.log("- Непереведённых ключей подставлено английским текстом: " + r.added.length);
+              console.log("- Ключей убрано (апстрим их больше не использует): " + r.dropped.length);
+              if (r.added.length) {
+                console.log();
+                console.log("<details><summary>Ключи, которые надо перевести</summary>");
+                console.log();
+                for (const e of r.added) console.log("- `" + e.unit + "` → `" + e.key + "`");
+                console.log();
+                console.log("</details>");
+              }
+              if (r.dropped.length) {
+                console.log();
+                console.log("<details><summary>Убранные ключи</summary>");
+                console.log();
+                for (const e of r.dropped) console.log("- `" + e.unit + "` → `" + e.key + "`");
+                console.log();
+                console.log("</details>");
+              }
+            '
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo
+              echo "**Dry run:** ветка и тег не отправлены."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue when the sync could not release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ steps.target.outputs.ref }}
+          VERSION: ${{ steps.target.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          REASON="$(cat "$WORK_DIR/reason.txt" 2>/dev/null || echo 'Причина не записана — смотрите лог прогона.')"
+          TITLE="Автосинхронизация с апстримом: ${VERSION:-?} не удалось выпустить"
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "Dry run: issue не создаётся."
+            printf '%s\n\n%s\n' "$TITLE" "$REASON"
+            exit 0
+          fi
+
+          gh label create ru-sync --repo "$GITHUB_REPOSITORY" \
+            --color B60205 --description "Автосинхронизация русского форка с апстримом" --force >/dev/null 2>&1 || true
+
+          # One issue per version: a scheduled run every 6 hours must not pile up.
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+               --json title --jq '.[].title' | grep -qxF "$TITLE"; then
+            echo "Открытый issue для этой версии уже есть — новый не создаю."
+            exit 0
+          fi
+
+          {
+            echo "Автосинхронизация не смогла выпустить русскую сборку, поэтому релиз **не** создан."
+            echo
+            echo "**Апстрим-тег:** \`${REF:-неизвестен}\`"
+            echo "**Прогон:** ${RUN_URL}"
+            echo
+            echo "$REASON"
+            echo
+            echo "---"
+            echo
+            echo "Что делать: разобрать причину, поправить ветку \`ru\` вручную, затем запустить"
+            echo "workflow «RU upstream sync» с параметром \`force\` — он выпустит следующую сборку."
+            echo "Подробности — в \`FORK.md\`, раздел «Автосинхронизация»."
+          } > "$WORK_DIR/issue.md"
+
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$TITLE" \
+            --label ru-sync \
+            --body-file "$WORK_DIR/issue.md"
