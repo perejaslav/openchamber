@@ -1,12 +1,14 @@
 # <picture><source media="(prefers-color-scheme: dark)" srcset="docs/references/badges/openchamber-logo-dark.svg"><img src="docs/references/badges/openchamber-logo-light.svg" width="32" height="32" align="absmiddle" /></picture> OpenChamber
 
 > **Русская версия.** Это личный форк [openchamber/openchamber](https://github.com/openchamber/openchamber)
-> с русской локализацией интерфейса и документации. Всё остальное — оригинальный проект.
+> с русской локализацией интерфейса и документации. Русский язык здесь включён **по умолчанию**.
+> Всё остальное — оригинальный проект.
 > Оригинальный README на английском: [`git show upstream/main:README.md`](https://github.com/openchamber/openchamber/blob/main/README.md).
-> Как обновляться и собирать — см. [FORK.md](FORK.md).
+> Готовые сборки — в [Releases](https://github.com/perejaslav/openchamber/releases);
+> как обновляться и собирать — см. [FORK.md](FORK.md).
 
 [![GitHub stars](https://img.shields.io/github/stars/openchamber/openchamber?style=flat&labelColor=100F0F&color=66800B)](https://github.com/openchamber/openchamber/stargazers)
-[![GitHub release](https://img.shields.io/github/v/release/openchamber/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/openchamber/openchamber/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/perejaslav/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/perejaslav/openchamber/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-join.svg?style=flat&labelColor=100F0F&color=8B7EC8&logo=discord&logoColor=FFFCF0)](https://discord.gg/ZYRSdnwwKA)
 [![Support the project](https://img.shields.io/badge/Support-Project-black?style=flat&labelColor=100F0F&color=EC8B49&logo=patreon&logoColor=FFFCF0)](https://www.patreon.com/openchamber)
 

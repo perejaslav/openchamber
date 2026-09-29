@@ -1,0 +1,209 @@
+name: Fork release (RU)
+
+# The fork's own release pipeline, deliberately separate from upstream's
+# `release.yml`: that one runs on Blacksmith runners and needs Apple/npm
+# secrets a personal fork does not have.
+#
+# Trigger it with a `ru-v*` tag — NOT `v*`. A `v*` tag would also fire
+# upstream's `release.yml` and `vscode-extension.yml`, which would then sit
+# forever waiting for a runner the fork cannot reach.
+#
+#   git tag ru-v2.0.3.1
+#   git push origin ru-v2.0.3.1
+#
+# The tag is only a label for the release; the version baked into the app comes
+# from packages/electron/package.json, which stays equal to the upstream
+# release the fork is built on. That is what keeps the built-in updater able to
+# move from 2.0.3 to a future 2.0.4 (see FORK.md).
+
+on:
+  push:
+    tags:
+      - 'ru-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows x64 (NSIS)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The whole point of the fork. A release must not ship a broken locale.
+      - name: Verify the Russian locale
+        run: bun test packages/ui/src/lib/i18n
+
+      - name: Get bundled OpenCode CLI version
+        id: opencode_cli_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/electron/package.json').opencodeCli.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bundled OpenCode CLI artifact
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: packages/electron/.cache/opencode-cli
+          key: opencode-cli-${{ runner.os }}-x64-${{ steps.opencode_cli_version.outputs.version }}
+          restore-keys: |
+            opencode-cli-${{ runner.os }}-x64-
+
+      - name: Build web assets
+        working-directory: packages/electron
+        run: bun run build:web-assets
+
+      - name: Prepare bundled OpenCode CLI
+        working-directory: packages/electron
+        shell: bash
+        run: |
+          bun run prepare:opencode-cli
+          bun run verify:opencode-cli
+
+      - name: Bundle main process
+        working-directory: packages/electron
+        run: bun run bundle:main
+
+      # npmRebuild=false in package.json, so electron-builder will not compile
+      # native deps on its own — rebuild against the target Electron ABI first,
+      # otherwise node-pty/bun-pty crash on require inside the packaged app.
+      - name: Rebuild native modules
+        working-directory: packages/electron
+        shell: bash
+        env:
+          ELECTRON_BUILDER_ARCH: x64
+        run: bun run rebuild:native
+
+      - name: Package Windows installer
+        working-directory: packages/electron
+        shell: bash
+        run: |
+          node ./scripts/package.mjs --win --x64 --publish=never
+          bun run verify:opencode-cli:packaged
+
+      - name: Upload release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-release-windows
+          path: |
+            packages/electron/dist/*.exe
+            packages/electron/dist/*.blockmap
+            packages/electron/dist/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    name: Linux x64 (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify the Russian locale
+        run: bun test packages/ui/src/lib/i18n
+
+      - name: Get bundled OpenCode CLI version
+        id: opencode_cli_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/electron/package.json').opencodeCli.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bundled OpenCode CLI artifact
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: packages/electron/.cache/opencode-cli
+          key: opencode-cli-${{ runner.os }}-x64-${{ steps.opencode_cli_version.outputs.version }}
+          restore-keys: |
+            opencode-cli-${{ runner.os }}-x64-
+
+      - name: Build and package Linux AppImage
+        working-directory: packages/electron
+        env:
+          OPENCHAMBER_TARGET_ARCH: x64
+        run: |
+          set -euo pipefail
+          bun run build:web-assets
+          bun run prepare:opencode-cli
+          bun run verify:opencode-cli
+          bun run bundle:main
+          bun run rebuild:native
+          node ./scripts/package.mjs --linux --x64 --publish=never
+          bun run verify:opencode-cli:packaged
+          bun run verify:linux-appimage
+
+      - name: Upload release files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fork-release-linux
+          path: |
+            packages/electron/dist/*.AppImage
+            packages/electron/dist/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [build-windows, build-linux]
+    # Windows is the primary target, so a Windows build alone is enough to
+    # publish; a Linux failure does not hold the release back.
+    if: ${{ !cancelled() && needs.build-windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: fork-release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la release-assets
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OpenChamber RU ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: false
+          files: release-assets/*
+          body: |
+            Русская сборка OpenChamber — форк [perejaslav/openchamber](https://github.com/perejaslav/openchamber).
+
+            Интерфейс полностью на русском, русский язык включён **по умолчанию**;
+            английский и остальные языки остаются в переключателе.
+
+            Собрано из ветки `ru` (апстрим + русская локализация) автоматически,
+            из тега `${{ github.ref_name }}`.
+
+            ### Установка
+
+            - **Windows:** скачайте `OpenChamber-...-win-x64.exe` и запустите. Установщик не подписан —
+              SmartScreen покажет предупреждение, это ожидаемо: «Подробнее» → «Выполнить в любом случае».
+            - **Linux:** скачайте `OpenChamber-...-linux-x86_64.AppImage`, сделайте файл исполняемым
+              (`chmod +x`) и запустите.
+
+            Сборка для macOS не публикуется: без подписи Apple приложение не запускается на macOS.
