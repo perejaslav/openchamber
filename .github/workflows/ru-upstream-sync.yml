@@ -237,6 +237,26 @@ jobs:
             exit 1
           fi
 
+      - name: Commit the dictionary repairs
+        if: steps.target.outputs.skip != 'true'
+        env:
+          REF: ${{ steps.target.outputs.ref }}
+        run: |
+          set -euo pipefail
+
+          # The merge commit carries the conflict resolution, but the
+          # reconciliation runs after it and only edits the working tree. Without
+          # this commit the push would ship the merge without the filled keys —
+          # and the locale tests here would still pass, because they read the
+          # working tree, not the commit. That is exactly how ru-v2.0.4.1 got a
+          # green sync and a red release.
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Правок в словарях нет — коммитить нечего."
+            exit 0
+          fi
+          git commit -m "chore(ru): reconcile dictionaries after merging ${REF}"
+
       - name: Run the locale tests and the type check
         if: steps.target.outputs.skip != 'true'
         run: |
@@ -269,6 +289,20 @@ jobs:
             exit 1
           fi
           tail -8 "$WORK_DIR/typecheck.txt"
+
+      - name: Make sure nothing is left uncommitted
+        if: steps.target.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+
+          # The release gate runs on the pushed commit, not on this working tree.
+          # Anything left uncommitted here passes the tests above and then fails
+          # the release build — so refuse to push at all.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::В рабочем дереве остались незакоммиченные правки — релиз собрался бы из другого состояния."
+            git status --porcelain --untracked-files=no
+            exit 1
+          fi
 
       - name: Push the branch and the release tag
         if: steps.target.outputs.skip != 'true'
