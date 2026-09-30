@@ -56,6 +56,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.liveActivity.usedSubagent': 'Использован {count} субагент',
   'chat.liveActivity.usedSubagents': 'Использовано субагентов: {count}',
   'sessions.sidebar.projectAction.active': 'Действие проекта выполняется',
+  'common.language.dutch': 'Dutch (не переведено)',
   ...settingsDict,
   ...linearIssuePickerI18n.ru,
   ...linearPanelI18n.ru,

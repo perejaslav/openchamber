@@ -251,6 +251,8 @@ export const fileArtifactsI18n = {
     'filesView.artifact.image.fit': 'По размеру',
     'filesView.artifact.image.fitTitle': 'Вписать изображение в панель',
     'filesView.artifact.image.actualTitle': 'Показать изображение в реальном размере',
+    'filesView.artifact.image.zoomOut': 'Zoom out (не переведено)',
+    'filesView.artifact.image.zoomIn': 'Zoom in (не переведено)',
     'filesView.artifact.media.unplayable': 'Этот файл нельзя воспроизвести здесь. Скачайте его, чтобы открыть в другом приложении.',
     'filesView.artifact.font.sample': 'Съешь же ещё этих мягких французских булок, да выпей чаю',
     'filesView.artifact.font.loadFailed': 'Не удалось загрузить этот шрифт.',

@@ -574,6 +574,13 @@ export const providersI18n = {
   },
   ru: {
     'settings.providers.grid.description': 'Провайдеры моделей, которые может использовать OpenCode. Откройте один, чтобы управлять его аккаунтами и моделями.',
+    'settings.providers.enterpriseTitle': 'Enterprise mode (не переведено)',
+    'settings.providers.enterpriseManagedBy': 'Managed by {organization}. (не переведено)',
+    'settings.providers.enterprisePolicyUnreadable': 'The machine policy file could not be read, so enterprise mode stays on. Ask your administrator to check it. (не переведено)',
+    'settings.providers.enterpriseMode': 'Providers are managed in the OpenCode config, so new ones can’t be connected here. You can still switch between or remove the accounts you have. (не переведено)',
+    'settings.providers.enterprisePolicyMissing': 'OpenCode has no provider policy yet, so it can still use every provider it knows, including keys from environment variables and its built-in providers. (не переведено)',
+    'settings.providers.enterprisePolicyConsole': 'Provider rules can also come from your OpenCode Console workspace, which OpenChamber can’t read. (не переведено)',
+    'settings.providers.enterprisePolicyLink': 'Restrict providers with a policy (не переведено)',
     'settings.providers.grid.searchPlaceholder': 'Поиск провайдеров',
     'settings.providers.grid.connect': 'Подключить провайдера',
     'settings.providers.grid.connectHint': 'API-ключ или вход',
