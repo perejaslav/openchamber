@@ -1,17 +1,13 @@
-export type Locale = 'en' | 'de' | 'fr' | 'zh-CN' | 'zh-TW' | 'uk' | 'es' | 'pt-BR' | 'ko' | 'pl' | 'ja' | 'tr' | 'ru';
+export type Locale = 'en' | 'de' | 'fr' | 'nl' | 'zh-CN' | 'zh-TW' | 'uk' | 'es' | 'pt-BR' | 'ko' | 'pl' | 'ja' | 'tr' | 'ru';
 
-export const LOCALES = ['ru', 'en', 'de', 'fr', 'zh-CN', 'zh-TW', 'uk', 'es', 'pt-BR', 'ko', 'pl', 'ja', 'tr'] as const satisfies readonly Locale[];
+export const LOCALES = ['ru', 'en', 'de', 'fr', 'nl', 'zh-CN', 'zh-TW', 'uk', 'es', 'pt-BR', 'ko', 'pl', 'ja', 'tr'] as const satisfies readonly Locale[];
 
-/**
- * This fork ships Russian first: a fresh install starts in Russian and any
- * language it does not recognise falls back to Russian rather than English.
- * English and the other eleven locales stay selectable in the picker.
- */
 export const DEFAULT_LOCALE: Locale = 'ru';
 
-export const LOCALE_LABEL_KEYS: Record<Locale, 'common.language.english' | 'common.language.french' | 'common.language.simplifiedChinese' | 'common.language.traditionalChinese' | 'common.language.ukrainian' | 'common.language.spanish' | 'common.language.brazilianPortuguese' | 'common.language.korean' | 'common.language.polish' | 'common.language.german' | 'common.language.japanese' | 'common.language.turkish' | 'common.language.russian'> = {
+export const LOCALE_LABEL_KEYS: Record<Locale, 'common.language.english' | 'common.language.french' | 'common.language.dutch' | 'common.language.simplifiedChinese' | 'common.language.traditionalChinese' | 'common.language.ukrainian' | 'common.language.spanish' | 'common.language.brazilianPortuguese' | 'common.language.korean' | 'common.language.polish' | 'common.language.german' | 'common.language.japanese' | 'common.language.turkish' | 'common.language.russian'> = {
   en: 'common.language.english',
   fr: 'common.language.french',
+  nl: 'common.language.dutch',
   'zh-CN': 'common.language.simplifiedChinese',
   'zh-TW': 'common.language.traditionalChinese',
   uk: 'common.language.ukrainian',
@@ -51,6 +47,9 @@ export function normalizeLocale(value: string | undefined | null): Locale {
   }
   if (normalized === 'fr' || normalized.startsWith('fr-')) {
     return 'fr';
+  }
+  if (normalized === 'nl' || normalized.startsWith('nl-')) {
+    return 'nl';
   }
   if (normalized === 'uk' || normalized.startsWith('uk-') || normalized === 'ua' || normalized.startsWith('ua-')) {
     return 'uk';
