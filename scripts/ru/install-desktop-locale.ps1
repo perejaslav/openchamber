@@ -18,7 +18,13 @@
              branch build on top of it. Re-running apply refreshes the patched
              files without touching the backup.
     revert : overlays the original web-dist back on top of the patched one and
-             drops the patch marker. The app behaves exactly as before.
+             drops the patch marker. The app behaves exactly as before, but the
+             overlay leaves two things behind on purpose: the patched build's
+             chunk files (unreferenced, and the reason `status` then reports
+             DICTIONARY-ONLY rather than ORIGINAL) and the backup itself, which
+             `apply` reuses. Before installing an official release build, delete
+             both - otherwise a later `revert` would restore the stale backup
+             over the freshly installed app.
     status : reports what is currently installed. Read-only.
 
     OpenChamber must be closed before apply/revert.
@@ -184,7 +190,11 @@ switch ($Action) {
         $marker = Join-Path $TargetDir $MarkerName
         if (Test-Path $marker) { Remove-Item -Path $marker -Force }
 
-        if ((Get-PatchState) -ne 'original') { throw "Marker still present after revert." }
+        # Overlaying cannot reach the 'original' state by itself: the patched
+        # build's chunk files stay on disk as unreferenced leftovers, and
+        # Get-PatchState counts those as a dictionary, so it reports
+        # 'dictionary-only'. The marker is the real signal that the patch is off.
+        if (Test-Marker -Dir $TargetDir) { throw "Marker still present after revert." }
 
         $leftover = Get-UiDictionaryChunks -Dir $TargetDir
         Write-Output ""
@@ -192,7 +202,9 @@ switch ($Action) {
         if ($leftover) {
             Write-Output "Note: stale chunk files from the patch are still on disk (unreferenced):"
             Write-Output "      $($leftover -join ', ')"
-            Write-Output "      They are not loaded. Remove them by reinstalling OpenChamber if you want a clean tree."
         }
+        Write-Output "Note: the backup at $BackupDir is kept on purpose - 'apply' reuses it."
+        Write-Output "      Delete it before installing an official release build: a later 'revert'"
+        Write-Output "      would otherwise restore this stale copy over the freshly installed app."
     }
 }
