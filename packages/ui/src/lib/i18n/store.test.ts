@@ -14,13 +14,18 @@ const resetStore = () => {
 };
 
 const waitForLocaleLoadToSettle = async (locale: Locale) => {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (useI18nStore.getState().loadingLocale !== locale) {
-      return;
+  // Wait on wall-clock time, not on a tick count. The dictionary is a dynamic
+  // import, and the first one in a process also pays for Bun's TypeScript
+  // loader — 20 zero-delay ticks was not enough for the 350 KB Russian
+  // dictionary on the Linux CI runner, so the test failed there while passing
+  // on Windows.
+  const deadline = Date.now() + 5000;
+  while (useI18nStore.getState().loadingLocale === locale) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for ${locale} dictionary load`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Timed out waiting for ${locale} dictionary load`);
 };
 
 describe('i18n store', () => {
