@@ -49,6 +49,8 @@ const RUSSIAN_LABEL = {
   'zh-CN': '俄语',
   'zh-TW': '俄語',
   tr: 'Rusça',
+  ar: 'الروسية',
+  he: 'רוסית',
 };
 
 const RUSSIAN_LABEL_KEY = 'common.language.russian';
@@ -179,6 +181,69 @@ const ensureRuntime = (file) => {
   return changed.length > 0;
 };
 
+/** `import { providersI18n } from './providers.i18n';` — a module dictionary pull. */
+const MODULE_IMPORT_RE = /^import \{ (\w+) \} from '\.\/[\w.-]+\.i18n';$/;
+
+/**
+ * Keep `ru.ts` importing and spreading every module dictionary `en.ts` pulls in.
+ *
+ * Upstream keeps splitting strings out into new `*.i18n.ts` modules. The resolver
+ * gives each new module an empty `ru` block and `fill-missing-keys.mjs` fills it,
+ * but nothing ever taught `ru.ts` to import and spread that module — so the
+ * flattened Russian dictionary silently misses every key it holds and
+ * `messages.test.ts` fails on key parity. The module files look correct, which
+ * makes this one hard to spot from the conflict list alone.
+ */
+const ensureRuModuleWiring = (file) => {
+  if (!fs.existsSync(file)) return false;
+
+  const enLines = readLines(path.join(MESSAGES, 'en.ts'));
+  const enModules = [];
+  for (const line of enLines) {
+    const match = line.match(MODULE_IMPORT_RE);
+    if (match) enModules.push({ binding: match[1], line });
+  }
+  if (!enModules.length) fail(`${MESSAGES}/en.ts: не найдено ни одного импорта модуля`);
+
+  const lines = readLines(file);
+  let changed = false;
+
+  // Imports, in en.ts order: each missing one lands right after the import it
+  // follows upstream, so the list stays a mirror of en.ts.
+  let importAnchor = lines.findIndex((line) => /^import \{ settingsDict \} from '\.\//.test(line));
+  if (importAnchor < 0) fail(`${file}: не найден импорт settingsDict`);
+  for (const entry of enModules) {
+    const present = lines.some((line) => {
+      const match = line.match(MODULE_IMPORT_RE);
+      return match !== null && match[1] === entry.binding;
+    });
+    if (present) continue;
+    lines.splice(importAnchor + 1, 0, entry.line);
+    importAnchor += 1;
+    changed = true;
+  }
+
+  // Spreads, in en.ts order. One pass over the module list with a cursor on the
+  // spread we last matched, so a newly inserted spread lands where upstream has
+  // it rather than at the end of the block.
+  let spreadCursor = lines.findIndex((line) => /^  \.\.\.settingsDict,$/.test(line));
+  if (spreadCursor < 0) fail(`${file}: не найден спред settingsDict`);
+  for (const entry of enModules) {
+    const target = `  ...${entry.binding}.ru,`;
+    const found = lines.findIndex((line, index) => index > spreadCursor && line.trim() === target.trim());
+    if (found >= 0) {
+      spreadCursor = found;
+      continue;
+    }
+    lines.splice(spreadCursor + 1, 0, target);
+    spreadCursor += 1;
+    changed = true;
+  }
+
+  if (changed) writeLines(file, lines);
+  return changed;
+};
+
 /** `en.ts`, `pt-BR.ts`, `zh-CN.ts` … — upstream's per-locale dictionaries. */
 const LOCALE_DICTIONARY_RE = /^[a-z]{2}(?:-[A-Za-z]{2})?\.ts$/;
 
@@ -241,6 +306,16 @@ const main = () => {
         leftAlone.push(`${file} (${error instanceof Error ? error.message : error})`);
       }
     }
+  }
+
+  // A module upstream added gets its `ru` block above, but `ru.ts` still has to
+  // import and spread it — otherwise the flattened dictionary loses every key
+  // the new module carries.
+  const ruFile = path.join(MESSAGES, 'ru.ts');
+  try {
+    if (ensureRuModuleWiring(ruFile)) resolved.push(ruFile);
+  } catch (error) {
+    leftAlone.push(`${ruFile} (${error instanceof Error ? error.message : error})`);
   }
 
   for (const file of resolved) {
