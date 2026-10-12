@@ -16,6 +16,9 @@ const INTL_LOCALE_BY_LOCALE: Record<Locale, string> = {
   ja: 'ja-JP',
   tr: 'tr-TR',
   ru: 'ru-RU',
+  // Western digits sit better next to code, token counts and IDs than Arabic-Indic ones.
+  ar: 'ar-u-nu-latn',
+  he: 'he-IL',
 };
 
 const getIntlLocale = (locale: Locale): string => INTL_LOCALE_BY_LOCALE[locale] ?? 'en-US';

@@ -23,7 +23,7 @@ import { RuntimeAPIProvider } from '@/contexts/RuntimeAPIProvider';
 import { useAuthSessionStore } from '@/lib/runtime-auth-expiry';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toaster } from '@/components/ui/sonner';
+import { MobileToaster } from './MobileToaster';
 import { usePushVisibilityBeacon } from '@/hooks/usePushVisibilityBeacon';
 import { useRouter } from '@/hooks/useRouter';
 import { useTerminalSessionKeepalive } from '@/hooks/useTerminalSessionKeepalive';
@@ -47,7 +47,7 @@ import { cn } from '@/lib/utils';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
-import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
+import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useGitStore } from '@/stores/useGitStore';
 import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
@@ -72,10 +72,12 @@ import { MobileInstancesSurface } from './MobileInstancesSurface';
 import { MobileSessionsSheet } from './MobileSessionsSheet';
 import { MobileFullscreenSurface } from './MobileFullscreenSurface';
 import { UsageStatsView } from '@/components/views/usage/UsageStatsView';
+import { ArchiveSessionsView } from '@/components/views/ArchiveView';
+import { MobileSourceBoard } from '@/components/sourceBoard/SourceBoardView';
 import { ScheduledTasksView, type ScheduledTasksLeaveReason } from '@/components/session/ScheduledTasksDialog';
 import { MobileWorkspaceDrawer, type MobileWorkspaceTab } from './MobileWorkspaceDrawer';
 import { DedicatedMobileAppProvider, type MobileAppActions } from './mobileAppContext';
-import { autoConnectLastInstance, getAutoConnectTargetLabel, logMobileConnectEvent, reprobeActiveConnection, type AutoConnectOutcome } from './mobileConnections';
+import { autoConnectLastInstance, getAutoConnectTargetLabel, logMobileConnectEvent, reprobeActiveConnection, suppressAutoConnectUntilManualConnect, type AutoConnectOutcome } from './mobileConnections';
 import { isCapacitorMobileApp, useNativeAndroidBackButton, useNativeMobileChrome, useNativeMobileLifecycle } from './mobileNativeChrome';
 import { reconnectAppForTransportSwitch, resetAppForRuntimeEndpointChange } from './runtimeEndpointReset';
 import { useAppFontEffects } from './useAppFontEffects';
@@ -127,10 +129,10 @@ const NATIVE_RESUME_SYNC_EVENT_THROTTLE_MS = 1_000;
     footer. Exactly one can be open at a time — opening another replaces it,
     closing returns to the chat. The sessions drawer and the workspace drawer
     (Changes / Files / Terminal / Notes / MCP) are separate layers. */
-type MobileSurface = 'instances' | 'scheduled' | 'settings' | 'update' | 'usage';
+type MobileSurface = 'archive' | 'board' | 'instances' | 'scheduled' | 'settings' | 'update' | 'usage';
 
 const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onActiveConnectionDeleted }) => {
-  const { t } = useI18n();
+  const { t, direction } = useI18n();
   // The mobile root does not mount MainLayout, so it owns its own terminal
   // keepalive: without it, background PTYs (running project actions included)
   // are idle-reaped by the server while the workspace drawer is closed.
@@ -292,8 +294,9 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
       },
       openFiles: () => openFilesSurface(),
       openSettings: () => openSettingsSurface('nav'),
+      openSourceBoard: () => openSurface('board'),
     }),
-    [openChangesSurface, openFilesSurface, openSettingsSurface],
+    [openChangesSurface, openFilesSurface, openSettingsSurface, openSurface],
   );
 
   // Expose the shell's panel-opening actions to the deep-link layer so openchamber:// URLs
@@ -329,15 +332,19 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
   );
   useDeepLinkHandlers(deepLinkHandlers);
 
-  // Edge swipes on the chat: left edge opens the sessions drawer (the
-  // persistent sidebar on a tablet), right edge the workspace drawer.
+  // Edge swipes on the chat: the start edge opens the sessions drawer (the
+  // persistent sidebar on a tablet), the end edge the workspace drawer. Each
+  // drawer slides in from the side of its header button: left and right in
+  // LTR, mirrored in RTL.
   const chatMainRef = React.useRef<HTMLElement>(null);
+  const openSessionsFromEdge = () => {
+    if (isTabletLayout) setSidebarOpen(true);
+    else setSessionsSheetOpen(true);
+  };
+  const openWorkspaceFromEdge = () => setWorkspaceOpen(true);
   useEdgeSwipe(chatMainRef, {
-    onLeftEdgeSwipe: () => {
-      if (isTabletLayout) setSidebarOpen(true);
-      else setSessionsSheetOpen(true);
-    },
-    onRightEdgeSwipe: () => setWorkspaceOpen(true),
+    onLeftEdgeSwipe: direction === 'rtl' ? openWorkspaceFromEdge : openSessionsFromEdge,
+    onRightEdgeSwipe: direction === 'rtl' ? openSessionsFromEdge : openWorkspaceFromEdge,
   });
 
   // Settings owns a drill-down of its own (nav → page list → item), so the
@@ -400,6 +407,8 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
       onOpenSettings: () => openSettingsSurface('nav'),
       onOpenUsage: () => openSurface('usage'),
       onOpenScheduled: () => openSurface('scheduled'),
+      onOpenArchive: () => openSurface('archive'),
+      onOpenSourceBoard: () => openSurface('board'),
       onOpenUpdate: showUpdateItem ? () => openSurface('update') : undefined,
     }),
     [openSettingsSurface, openSurface, showCapacitorOnlyFeatures, showUpdateItem],
@@ -412,6 +421,20 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
     setSessionsSheetOpen(false);
     if (reason === 'file') openFilesSurface();
   }, [closeSurface, openFilesSurface]);
+
+  // A session started from the board replaces the page: back to the chat.
+  const leaveSourceBoard = React.useCallback(() => {
+    closeSurface();
+    setSessionsSheetOpen(false);
+  }, [closeSurface]);
+
+  // An opened archived session replaces the page: back to the chat, the same
+  // way picking a session from the list gives the space back.
+  const leaveArchive = React.useCallback(() => {
+    closeSurface();
+    setSessionsSheetOpen(false);
+    if (isTabletLayout && !roomyForPanels) setSidebarOpen(false);
+  }, [closeSurface, isTabletLayout, roomyForPanels]);
 
   const openMcpCreateSettings = React.useCallback(() => {
     const baseName = 'new-mcp-server';
@@ -468,8 +491,8 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
               // rows are opaque bg-background (the swipe actions live under
               // them), so a tinted sidebar would show through as row-shaped
               // bands. Same surface as the phone drawer.
-              'relative flex h-full shrink-0 flex-col overflow-hidden border-r border-border/70 bg-background will-change-[width] motion-reduce:transition-none',
-              !sidebarOpen && 'border-r-0',
+              'relative flex h-full shrink-0 flex-col overflow-hidden border-e border-border/70 bg-background will-change-[width] motion-reduce:transition-none',
+              !sidebarOpen && 'border-e-0',
             )}
             style={{
               width: sidebarOpen ? leftResize.width : 0,
@@ -554,8 +577,8 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
         <aside
           ref={rightResize.asideRef}
           className={cn(
-            'relative flex h-full shrink-0 flex-col overflow-hidden border-l border-border/70 bg-background will-change-[width] motion-reduce:transition-none',
-            !workspacePanelWidth && 'border-l-0',
+            'relative flex h-full shrink-0 flex-col overflow-hidden border-s border-border/70 bg-background will-change-[width] motion-reduce:transition-none',
+            !workspacePanelWidth && 'border-s-0',
           )}
           style={{
             width: workspacePanelWidth,
@@ -693,6 +716,36 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
           </MobileFullscreenSurface>
         ) : null}
 
+        {activeSurface === 'board' ? (
+          <MobileFullscreenSurface
+            open
+            variant={surfaceVariant}
+            dialogAlign="app"
+            onClose={closeSurface}
+            ariaLabel={t('sourceBoard.title')}
+            title={t('sourceBoard.title')}
+          >
+            <ErrorBoundary>
+              <MobileSourceBoard onLeave={leaveSourceBoard} />
+            </ErrorBoundary>
+          </MobileFullscreenSurface>
+        ) : null}
+
+        {activeSurface === 'archive' ? (
+          <MobileFullscreenSurface
+            open
+            variant={surfaceVariant}
+            dialogAlign="app"
+            onClose={closeSurface}
+            ariaLabel={t('sessions.archivePage.title')}
+            title={t('sessions.archivePage.title')}
+          >
+            <ErrorBoundary>
+              <ArchiveSessionsView layout="mobile" onLeave={leaveArchive} />
+            </ErrorBoundary>
+          </MobileFullscreenSurface>
+        ) : null}
+
         {activeSurface === 'update' ? (
           <MobileFullscreenSurface
             open
@@ -729,7 +782,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
   const error = useSessionUIStore((state) => state.error);
   const clearError = useSessionUIStore((state) => state.clearError);
   const setIsMobile = useUIStore((state) => state.setIsMobile);
-  const refreshGitHubAuthStatus = useGitHubAuthStore((state) => state.refreshStatus);
+  const refreshSourceControlAuth = useSourceControlAuthStore((state) => state.refreshAll);
   const refreshLinearAuthStatus = useLinearAuthStore((state) => state.refreshStatus);
   const setPlanModeEnabled = useFeatureFlagsStore((state) => state.setPlanModeEnabled);
   const projects = useProjectsStore((state) => state.projects);
@@ -789,7 +842,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
     // only refresh in place when the transport is 'unchanged'.
     const refreshInPlace = () => {
       void initializeApp();
-      void refreshGitHubAuthStatus(apis.github, { force: true });
+      void refreshSourceControlAuth(apis.sourceControl, { force: true });
       void refreshLinearAuthStatus(apis.linear, { force: true });
       if (providersCount === 0) void loadProviders({ source: 'mobileApp:nativeResume' });
       if (agentsCount === 0) void loadAgents({ source: 'mobileApp:nativeResume' });
@@ -859,7 +912,7 @@ function MobileAppContent({ apis }: MobileAppProps) {
       lastNativeResumeSyncEventAtRef.current = now;
       window.dispatchEvent(new Event('openchamber:system-resume'));
     }
-  }, [agentsCount, apis.github, apis.linear, initializeApp, loadAgents, loadProviders, providersCount, refreshGitHubAuthStatus, refreshLinearAuthStatus]);
+  }, [agentsCount, apis.sourceControl, apis.linear, initializeApp, loadAgents, loadProviders, providersCount, refreshSourceControlAuth, refreshLinearAuthStatus]);
 
   useNativeMobileChrome();
   useNativeMobileLifecycle(handleNativeResume);
@@ -1108,13 +1161,13 @@ function MobileAppContent({ apis }: MobileAppProps) {
   }, [currentDirectory, isConnected]);
 
   // Gated on isConnected (and re-run on reconnect/instance switch): probing the
-  // GitHub auth status before the runtime is reachable cached a "not connected"
+  // Source-control auth status before the runtime is reachable cached a "not connected"
   // answer that stuck until something else forced a re-check.
   React.useEffect(() => {
     if (!isConnected) return;
-    void refreshGitHubAuthStatus(apis.github, { force: true });
+    void refreshSourceControlAuth(apis.sourceControl, { force: true });
     void refreshLinearAuthStatus(apis.linear, { force: true });
-  }, [apis.github, apis.linear, isConnected, refreshGitHubAuthStatus, refreshLinearAuthStatus]);
+  }, [apis.sourceControl, apis.linear, isConnected, refreshSourceControlAuth, refreshLinearAuthStatus]);
 
   // Discover all worktrees for every known project so the draft session's
   // worktree/branch dropdown can list every available branch — not only the
@@ -1368,17 +1421,18 @@ function MobileAppContent({ apis }: MobileAppProps) {
                   draft — otherwise the auto-opened draft flashes first. The
                   shell (and sync) still mounts and warms up underneath. */}
               <AppStartupOverlay ready={!isNativeMobileApp || !lastSessionRestorePending} animated />
-              <SyncAppEffects embeddedBackgroundWorkEnabled={isInitialized} />
+              <SyncAppEffects backgroundWorkEnabled={isInitialized} />
               <OpenCodeUpdateToast />
               <MobileAppUpdateToast />
               <MobileShell onActiveConnectionDeleted={() => {
+                suppressAutoConnectUntilManualConnect();
                 switchRuntimeEndpoint({ apiBaseUrl: '', clientToken: null, runtimeKey: MOBILE_DISCONNECTED_RUNTIME_KEY });
                 setConnectionEpoch((value) => value + 1);
               }} />
               <AppLinkConfirmDialog />
               <SharedTrustConfirmDialog />
               {isolatedSpacesEnabled ? <><SpaceAccessDialog /><SpaceActionsSheet /><SpaceApplyDialog /><SpaceDeleteDialog /><SpaceSetupOutputDialog /></> : null}
-              <Toaster position="top-center" offset="calc(var(--oc-safe-area-top, 0px) + 16px)" />
+              <MobileToaster />
               {isInitialized ? <ConfigUpdateOverlay /> : null}
             </div>
           </TooltipProvider>

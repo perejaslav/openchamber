@@ -33,7 +33,7 @@ import {
   type TokenUsageInfo,
 } from "./model"
 import { projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
-import { runningShellFromWire, type RunningShell } from "./background-shell"
+import { runningShellFromWire, type RunningShell, type ShellEnd } from "./background-shell"
 
 // ---------------------------------------------------------------------------
 // Event vocabulary
@@ -139,7 +139,7 @@ export type SyncEvent =
   /** A session's shell command started; commands that belong to no session are not reported. */
   | { type: "shell.started"; properties: { shell: RunningShell } }
   /** A shell command exited or was removed. */
-  | { type: "shell.ended"; properties: { shellID: string } }
+  | { type: "shell.ended"; properties: { shellID: string; end: ShellEnd; endedAt: number } }
   | { type: "vcs.branch.updated"; properties: { branch?: string } }
   | { type: "mcp.status.changed"; properties: { server: string } }
   | { type: "catalog.updated"; properties: { kind: CatalogKind } }
@@ -152,6 +152,8 @@ export type SyncEvent =
   | { type: "openchamber.notification"; properties: OpenchamberNotification }
   // `modes` is the policy; `sessions` is its on/off view for clients from before the modes.
   | { type: "openchamber.permission-auto-accept"; properties: { sessions: Record<string, boolean>; modes?: Record<string, "ask" | "safety" | "auto">; revision?: number } }
+  /** The server did not answer this request on the user's behalf: it waits for the user. */
+  | { type: "openchamber.permission-left-for-user"; properties: { permissionId: string; sessionId: string; directory: string | null } }
 
 /** Agent-completion / restart notices the OpenChamber server publishes for non-web runtimes. */
 export type OpenchamberNotification = {
@@ -162,11 +164,10 @@ export type OpenchamberNotification = {
   body?: string
   tag?: string
   requireHidden?: boolean
+  showWhenFocused?: boolean
   desktopNotificationDelivered?: boolean
   desktopStdoutActive?: boolean
 }
-
-export type SyncEventType = SyncEvent["type"]
 
 /** A translated event together with the directory it belongs to. */
 export type RoutedSyncEvent = {
@@ -277,9 +278,11 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
           },
         },
       ]
+    // OpenCode stamps the session's update time with the switch, so a session
+    // read that left the server before it cannot roll the record back.
     case "session.agent.selected":
       return [
-        sessionEvent(event.data.sessionID, { agent: event.data.agent }),
+        sessionEvent(event.data.sessionID, { agent: event.data.agent, time: { updated: event.created } }),
         {
           type: "message.updated",
           properties: {
@@ -296,7 +299,7 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
       ]
     case "session.model.selected":
       return [
-        sessionEvent(event.data.sessionID, { model: event.data.model }),
+        sessionEvent(event.data.sessionID, { model: event.data.model, time: { updated: event.created } }),
         {
           type: "message.updated",
           properties: {
@@ -844,7 +847,8 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     // (`mcp.status.changed`).
     case "mcp.resources.changed":
       return []
-    // OpenChamber watches the filesystem through its own server routes.
+    // 2.x watches only the repository HEAD here, not the project's files. File
+    // browsers refresh from tool and step results instead (`lib/fileTreeChanges`).
     case "filesystem.changed":
       return []
     // Worktrees go through OpenChamber's own git API, not OpenCode's.
@@ -859,9 +863,16 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
       const shell = runningShellFromWire(event.data.info)
       return shell ? [{ type: "shell.started", properties: { shell } }] : []
     }
-    case "shell.exited":
+    case "shell.exited": {
+      // The wire status type includes `running`, but OpenCode publishes this
+      // event only once a command reached a terminal status.
+      const { status } = event.data
+      if (status === "running") return []
+      const end: ShellEnd = compact({ kind: "exited", status, exit: event.data.exit })
+      return [{ type: "shell.ended", properties: { shellID: event.data.id, end, endedAt: event.created } }]
+    }
     case "shell.deleted":
-      return [{ type: "shell.ended", properties: { shellID: event.data.id } }]
+      return [{ type: "shell.ended", properties: { shellID: event.data.id, end: { kind: "removed" }, endedAt: event.created } }]
 
     // PTYs are the terminal panel's own transport; it does not read them from
     // this stream.

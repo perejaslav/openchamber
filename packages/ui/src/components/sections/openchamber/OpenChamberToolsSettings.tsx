@@ -5,7 +5,6 @@ import type { IconName } from '@/components/icon/icons';
 import {
   SettingsSection,
   SettingsCheckboxRow,
-  SETTINGS_SELECT_SIZE,
 } from '@/components/sections/shared/SettingsSection';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
 import { Switch } from '@/components/ui/switch';
@@ -37,19 +36,15 @@ interface ToolRowProps {
 }
 
 /** Icon column width plus gap, so a nested row lines up with the tool text. */
-const TOOL_ROW_TEXT_INSET_CLASS = 'pl-[3.75rem]';
+const TOOL_ROW_TEXT_INSET_CLASS = 'ps-[3.75rem]';
 
 const ToolRow: React.FC<ToolRowProps> = ({ icon, title, summary, info, ariaLabel, checked, onChange, settingsItem }) => (
   <div data-settings-item={settingsItem} className="flex items-center gap-3 px-4 py-3">
-    <span
-      className={cn(
-        'flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-foreground transition-opacity',
-        !checked && 'opacity-50',
-      )}
-    >
+    {/* The switch alone says "off": dimming the row would read as disabled. */}
+    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-foreground">
       <Icon name={icon} className="size-4" />
     </span>
-    <div className={cn('min-w-0 flex-1 transition-opacity', !checked && 'opacity-60')}>
+    <div className="min-w-0 flex-1">
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="truncate typography-ui-label font-medium text-foreground">{title}</span>
         <SettingsInfoHint>{info}</SettingsInfoHint>
@@ -95,11 +90,20 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const setAgentNotifyToolEnabled = useUIStore((state) => state.setAgentNotifyToolEnabled);
   const agentToolsCodeMode = useUIStore((state) => state.agentToolsCodeMode);
   const setAgentToolsCodeMode = useUIStore((state) => state.setAgentToolsCodeMode);
+  const agentWorktreeMoveWithoutAsking = useUIStore((state) => state.agentWorktreeMoveWithoutAsking);
+  const setAgentWorktreeMoveWithoutAsking = useUIStore((state) => state.setAgentWorktreeMoveWithoutAsking);
 
   const handleAgentControlToolChange = React.useCallback((enabled: boolean) => {
     setAgentControlToolEnabled(enabled);
     void updateDesktopSettings({ agentControlToolEnabled: enabled });
   }, [setAgentControlToolEnabled]);
+
+  // Read into the tool's description by the server, which rewrites the plugin
+  // the running OpenCode watches; the agent reads the new rule on its next turn.
+  const handleAgentWorktreeMoveChange = React.useCallback((enabled: boolean) => {
+    setAgentWorktreeMoveWithoutAsking(enabled);
+    void updateDesktopSettings({ agentWorktreeMoveWithoutAsking: enabled });
+  }, [setAgentWorktreeMoveWithoutAsking]);
 
   const handleAgentWebToolChange = React.useCallback((enabled: boolean) => {
     setAgentWebToolEnabled(enabled);
@@ -154,16 +158,33 @@ export const OpenChamberToolsSettings: React.FC = () => {
   return (
     <SettingsSection title={t('settings.openchamber.tools.title')}>
       <div className="max-w-[44rem] divide-y divide-[var(--interactive-border)] rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)]">
-        <ToolRow
-          icon="node-tree"
-          settingsItem="sessions.agent-control-tool"
-          checked={agentControlToolEnabled}
-          onChange={handleAgentControlToolChange}
-          title={t('settings.openchamber.tools.field.agentControlTool')}
-          summary={t('settings.openchamber.tools.field.agentControlToolSummary')}
-          info={t('settings.openchamber.tools.field.agentControlToolInfo')}
-          ariaLabel={t('settings.openchamber.tools.field.agentControlToolAria')}
-        />
+        {/* One group, so no divider separates the control tool from its own setting. */}
+        <div>
+          <ToolRow
+            icon="node-tree"
+            settingsItem="sessions.agent-control-tool"
+            checked={agentControlToolEnabled}
+            onChange={handleAgentControlToolChange}
+            title={t('settings.openchamber.tools.field.agentControlTool')}
+            summary={t('settings.openchamber.tools.field.agentControlToolSummary')}
+            info={t('settings.openchamber.tools.field.agentControlToolInfo')}
+            ariaLabel={t('settings.openchamber.tools.field.agentControlToolAria')}
+          />
+
+          {/* Only with the tool: without it there is no move to decide about. */}
+          {agentControlToolEnabled ? (
+            <div className={cn('pb-3 pe-4', TOOL_ROW_TEXT_INSET_CLASS)}>
+              <SettingsCheckboxRow
+                settingsItem="sessions.agent-worktree-move"
+                checked={agentWorktreeMoveWithoutAsking}
+                onChange={handleAgentWorktreeMoveChange}
+                label={t('settings.openchamber.tools.field.agentWorktreeMove')}
+                ariaLabel={t('settings.openchamber.tools.field.agentWorktreeMoveAria')}
+                info={t('settings.openchamber.tools.field.agentWorktreeMoveInfo')}
+              />
+            </div>
+          ) : null}
+        </div>
 
         {/* One group, so no divider separates the web tool from its own setting. */}
         <div>
@@ -182,7 +203,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
               learn that browser-provider extensions exist. */}
           <div
             data-settings-item="sessions.browser-provider"
-            className={cn('flex min-w-0 items-center gap-2 pb-3 pr-4', TOOL_ROW_TEXT_INSET_CLASS)}
+            className={cn('flex min-w-0 items-center gap-2 pb-3 pe-4', TOOL_ROW_TEXT_INSET_CLASS)}
           >
             <span className="truncate typography-meta text-muted-foreground">
               {t('settings.openchamber.tools.browserProvider.label')}
@@ -194,8 +215,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
               disabled={!agentWebToolEnabled || providerGuests.length === 0}
             >
               <SelectTrigger
-                size={SETTINGS_SELECT_SIZE}
-                className="ml-auto w-auto min-w-0 max-w-[14rem]"
+                className="ms-auto w-auto min-w-0 max-w-[14rem]"
                 aria-label={t('settings.openchamber.tools.browserProvider.aria')}
               >
                 <SelectValue>

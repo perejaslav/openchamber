@@ -12,6 +12,7 @@ import { createRealpathCache } from '../path-realpath-cache.js';
 import { DEFAULT_UPSTREAM_STALL_TIMEOUT_MS } from '../event-stream/upstream-reader.js';
 import { recordStartupPerformance } from './startup-performance.js';
 import { getWorktreeBootstrapStatus } from '../git/service.js';
+import { PART_SHELLS_HEADER, parsePartShellsHeader, shellMessagePage } from './message-shells.js';
 
 const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -21,10 +22,11 @@ const OPENCODE_AGENT_KEEP_ALIVE_MS = 30_000;
 // exists to prevent (measured: at 64 concurrent requests, a cap of 32 left
 // 303 sockets in TIME_WAIT versus 0 at 256).
 const OPENCODE_AGENT_MAX_FREE_SOCKETS = 256;
-// Evicts idle free sockets from our side. Without it the only thing that
-// retires an idle pooled socket is the upstream closing it. Note this is
-// distinct from `keepAliveMsecs`, which is the TCP keep-alive probe delay.
-const OPENCODE_AGENT_IDLE_TIMEOUT_MS = 60_000;
+// Evicts idle free sockets from our side before upstream servers close them
+// (Node default keepAliveTimeout is 5s, Bun default idle timeout is 10s).
+// Setting this higher than upstream causes stale socket reuse where the
+// client writes into a dead socket and gets 'socket hang up' (ECONNRESET).
+const OPENCODE_AGENT_IDLE_TIMEOUT_MS = 4_000;
 
 const OPENCODE_AGENT_OPTIONS = {
   keepAlive: true,
@@ -458,7 +460,18 @@ export const registerOpenCodeProxy = (app, deps) => {
 
   const replayParsedBody = (proxyReq, req) => {
     const body = serializeParsedBody(req, proxyReq);
-    if (!body) return;
+    if (!body) {
+      // DO NOT remove transfer-encoding from a stream without content-length:
+      // Node then sends tunneled prompt bodies without framing, and OpenCode
+      // reads an empty payload (#4576).
+      if (proxyReq.getHeader('content-length') !== undefined) {
+        proxyReq.removeHeader('transfer-encoding');
+      }
+      return;
+    }
+    // DO NOT keep the copied transfer-encoding alongside the replayed body's
+    // content-length: OpenCode rejects requests with both headers (#4280).
+    proxyReq.removeHeader('transfer-encoding');
     proxyReq.setHeader('content-length', String(body.length));
     proxyReq.write(body);
   };
@@ -595,7 +608,9 @@ export const registerOpenCodeProxy = (app, deps) => {
       }
 
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Cache-Control', 'no-cache');
+      // `no-transform` keeps proxies and tunnels (Cloudflare among them) from
+      // compressing or buffering the stream, as the other SSE routes do.
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       if (typeof res.flushHeaders === 'function') {
@@ -974,6 +989,33 @@ export const registerOpenCodeProxy = (app, deps) => {
     }
   });
 
+  // A client that asks for it gets message pages with finished tool results
+  // shelled (see message-shells.js); anyone else reaches OpenCode untouched.
+  app.get('/api/session/:sessionID/message', async (req, res, next) => {
+    const keepWhole = parsePartShellsHeader(req.get(PART_SHELLS_HEADER));
+    if (!keepWhole) return next();
+    try {
+      const upstreamPath = await getRequestUpstreamPath(req);
+      const result = await fetchSessionListPayload(upstreamPath, { req });
+      res.status(result.upstream.status);
+      applyForwardProxyResponseHeaders(result.upstream.headers, res);
+      res.setHeader('content-type', result.contentType);
+      if (!result.isJson || result.parseError || !result.upstream.ok) {
+        res.end(result.bodyText);
+        return;
+      }
+      res.json(shellMessagePage(result.payload, keepWhole));
+    } catch (error) {
+      if (isAbortError(error)) return;
+      console.error('[proxy] OpenCode message.list proxy error:', error?.message ?? error);
+      if (!res.headersSent) {
+        res.status(503).json({ error: 'OpenCode service unavailable' });
+        return;
+      }
+      next(error);
+    }
+  });
+
   // v2 has one event stream. `/api/global/event` stays as an alias so a client
   // that has not reloaded yet keeps working; both reach upstream `/api/event`.
   app.get('/api/global/event', (req, res, next) => {
@@ -1041,6 +1083,15 @@ export const registerOpenCodeProxy = (app, deps) => {
         }
       },
       error: (err, req, res) => {
+        if (
+          req?.aborted ||
+          res?.writableEnded ||
+          res?.destroyed ||
+          req?.socket?.destroyed ||
+          res?.socket?.destroyed
+        ) {
+          return;
+        }
         console.error('[proxy] OpenCode proxy error:', err.message);
         if (req?.[PROXY_TIMEOUT_MARKER]) {
           return;

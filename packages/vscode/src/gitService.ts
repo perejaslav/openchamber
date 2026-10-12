@@ -11,7 +11,10 @@ import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { execGit as executeGit } from './bridge-git-process-runtime';
+import { readConfig } from './opencodeConfig';
+import { resolveWorktreeDirectory } from './worktree-directory';
 import { readSubmoduleState, resolveGitPathTarget, type GitPathUnavailable, type GitSubmoduleState } from './gitPathDiff';
+import { parseGitRemoteListing, type GitRemote } from './gitRemoteListing';
 import type { API as GitAPI, Repository, GitExtension, Status } from './git.d';
 
 let gitApi: GitAPI | null = null;
@@ -344,8 +347,14 @@ function extractGitNumstatDestinationPath(filePath: string): string {
  * Check if a directory is a git repository
  */
 export async function checkIsGitRepository(directory: string): Promise<boolean> {
-  const result = await execGit(['rev-parse', '--is-inside-work-tree'], directory);
-  return result.exitCode === 0 && result.stdout.trim() === 'true';
+  const result = await execGit(['rev-parse', '--is-inside-work-tree', '--is-bare-repository'], directory);
+  if (result.exitCode !== 0) {
+    return false;
+  }
+  // A bare repository is not inside a work tree but is still a repository:
+  // its linked worktrees are the checkouts a user works in.
+  const [insideWorkTree, bare] = result.stdout.split('\n').map((line) => line.trim());
+  return insideWorkTree === 'true' || bare === 'true';
 }
 
 /**
@@ -569,7 +578,9 @@ async function getGitStatusRaw(directory: string): Promise<GitStatusResult> {
   // Deliberately `-uall`: the web server lists a large untracked directory as
   // one `dir/` entry (readStatus in web/server/lib/git/service.js) and the
   // shared UI explains such an entry; this runtime has not adopted that bound.
-  const statusResult = await execGit(['status', '--porcelain=v1', '-b', '-uall'], directory);
+  // `--no-optional-locks`: a status that refreshes the index holds
+  // `.git/index.lock`, and a terminal `git commit` then fails (#2229).
+  const statusResult = await execGit(['--no-optional-locks', 'status', '--porcelain=v1', '-b', '-uall'], directory);
   
   if (statusResult.exitCode !== 0) {
     return {
@@ -823,7 +834,7 @@ export async function deleteGitBranch(directory: string, branch: string, force =
  * Delete a remote branch
  */
 export async function deleteRemoteBranch(directory: string, branch: string, remote = 'origin'): Promise<{ success: boolean }> {
-  const result = await execGit(['push', remote, '--delete', branch], directory);
+  const result = await execGit(['push', '--delete', '--', remote, branch], directory);
   return { success: result.exitCode === 0 };
 }
 
@@ -844,6 +855,7 @@ type WorktreeListEntry = {
   head?: string;
   branchRef?: string;
   branch?: string;
+  bare?: boolean;
 };
 
 interface GitWorktreeValidationError {
@@ -959,6 +971,14 @@ const parseWorktreePorcelain = (raw: string): WorktreeListEntry[] => {
       const branchRef = line.substring('branch '.length).trim();
       current.branchRef = branchRef;
       current.branch = cleanBranchName(branchRef);
+      continue;
+    }
+
+    // A bare repository lists itself as a worktree with a `bare` attribute
+    // and no HEAD or branch; without a working tree it is not a checkout a
+    // session can run in.
+    if (line === 'bare') {
+      current.bare = true;
     }
   }
 
@@ -1280,18 +1300,35 @@ const ensureOpenCodeProjectId = async (primaryWorktree: string): Promise<string>
   return projectId;
 };
 
-const resolveWorktreeProjectContext = async (directory: string) => {
+/**
+ * The primary checkout of a repository from its common git dir: `<root>/.git`
+ * for the checkout itself. Null for any other layout (a bare repository, a
+ * separate git dir).
+ */
+const primaryWorktreeRootFromGitDir = (gitDir: string): string | null => {
+  if (gitDir.replace(/\\/g, '/').endsWith('/.git')) {
+    return gitDir.slice(0, -'/.git'.length) || null;
+  }
+  return null;
+};
+
+const resolveWorktreeProjectContext = async (
+  directory: string,
+  options: { tolerateWorktreeRootConfigError?: boolean } = {},
+) => {
+  const tolerateWorktreeRootConfigError = options.tolerateWorktreeRootConfigError === true;
   const directoryPath = normalizeDirectoryPath(directory);
   if (!directoryPath) {
     throw new Error('Directory is required');
   }
 
-  const topResult = await runGitCommandOrThrow(
-    directoryPath,
-    ['rev-parse', '--show-toplevel'],
-    'Failed to resolve git top-level directory'
-  );
-  const sandbox = path.resolve(directoryPath, topResult.stdout.trim());
+  const topResult = await runGitCommand(directoryPath, ['rev-parse', '--show-toplevel']);
+  // A bare repository has no work tree, so `--show-toplevel` fails there; the
+  // bare directory itself still answers the object-level commands worktree
+  // creation runs against it.
+  const sandbox = topResult.success
+    ? path.resolve(directoryPath, topResult.stdout.trim())
+    : directoryPath;
 
   const commonResult = await runGitCommandOrThrow(
     sandbox,
@@ -1299,11 +1336,33 @@ const resolveWorktreeProjectContext = async (directory: string) => {
     'Failed to resolve git common directory'
   );
   const commonDir = path.resolve(sandbox, commonResult.stdout.trim());
-  const primaryWorktree = path.dirname(commonDir);
+  // `<root>/.git` resolves to the primary checkout; any other layout (a bare
+  // repository, a separate git dir) has no primary worktree, and the sandbox
+  // directory is the closest thing to one.
+  const primaryWorktree = primaryWorktreeRootFromGitDir(commonDir) || sandbox;
   const projectID = await ensureOpenCodeProjectId(primaryWorktree);
-  const worktreeRoot = path.join(getOpenCodeDataPath(), 'worktree', projectID);
+  // OpenCode's `worktree.directory` is read from the canonical checkout so a
+  // linked worktree still sees the project's saved configuration. When unset,
+  // worktrees keep landing in the data-dir folder keyed by project ID.
+  const legacyWorktreeRoot = path.join(getOpenCodeDataPath(), 'worktree', projectID);
+  // Creation must not guess a folder the user did not choose, so a config read
+  // failure propagates there. Read-only and removal paths pass
+  // `tolerateWorktreeRootConfigError` and fall back to the data-dir root.
+  let configuredWorktreeRoot: string | null = null;
+  try {
+    configuredWorktreeRoot = resolveWorktreeDirectory(readConfig(primaryWorktree), primaryWorktree);
+  } catch (error) {
+    if (!tolerateWorktreeRootConfigError) {
+      throw error;
+    }
+    console.warn(
+      '[GitService] Failed to read OpenCode worktree.directory; using the data-dir worktree root:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  const worktreeRoot = configuredWorktreeRoot || legacyWorktreeRoot;
 
-  return { projectID, sandbox, primaryWorktree, worktreeRoot };
+  return { projectID, sandbox, primaryWorktree, worktreeRoot, legacyWorktreeRoot };
 };
 
 const listWorktreeEntries = async (directory: string): Promise<WorktreeListEntry[]> => {
@@ -1363,7 +1422,10 @@ const fetchRemoteBranchRef = async (primaryWorktree: string, remoteName: string,
   }
 
   const refspec = `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`;
-  await runGitCommandOrThrow(primaryWorktree, ['fetch', remote, refspec], `Failed to fetch ${remote}/${branch}`);
+  // The remote value can be payload-derived (ensureRemoteUrl, upstreamRemote,
+  // startRef, existingBranch), so `--` keeps a leading-`-` value positional
+  // instead of letting git parse it as an option (defence-in-depth).
+  await runGitCommandOrThrow(primaryWorktree, ['fetch', '--', remote, refspec], `Failed to fetch ${remote}/${branch}`);
 };
 
 const resolveBranchForExistingMode = async (primaryWorktree: string, existingBranch: string, preferredBranchName: string) => {
@@ -1610,16 +1672,16 @@ const ensureRemoteWithUrl = async (primaryWorktree: string, remoteName: string, 
     return;
   }
 
-  const getUrl = await runGitCommand(primaryWorktree, ['remote', 'get-url', name]);
+  const getUrl = await runGitCommand(primaryWorktree, ['remote', 'get-url', '--', name]);
   if (getUrl.success) {
     const currentUrl = String(getUrl.stdout || '').trim();
     if (currentUrl !== url) {
-      await runGitCommandOrThrow(primaryWorktree, ['remote', 'set-url', name, url], 'Failed to update git remote URL');
+      await runGitCommandOrThrow(primaryWorktree, ['remote', 'set-url', '--', name, url], 'Failed to update git remote URL');
     }
     return;
   }
 
-  await runGitCommandOrThrow(primaryWorktree, ['remote', 'add', name, url], 'Failed to add git remote');
+  await runGitCommandOrThrow(primaryWorktree, ['remote', 'add', '--', name, url], 'Failed to add git remote');
 };
 
 const checkRemoteBranchExists = async (primaryWorktree: string, remoteName: string, branchName: string, remoteUrl = '') => {
@@ -1631,7 +1693,7 @@ const checkRemoteBranchExists = async (primaryWorktree: string, remoteName: stri
   }
 
   const target = url || remote;
-  const lsRemote = await runGitCommand(primaryWorktree, ['ls-remote', '--heads', target, `refs/heads/${branch}`]);
+  const lsRemote = await runGitCommand(primaryWorktree, ['ls-remote', '--heads', '--', target, `refs/heads/${branch}`]);
   if (!lsRemote.success) {
     return { success: false, found: false };
   }
@@ -1640,19 +1702,6 @@ const checkRemoteBranchExists = async (primaryWorktree: string, remoteName: stri
     success: true,
     found: Boolean(String(lsRemote.stdout || '').trim()),
   };
-};
-
-const setBranchTrackingFallback = async (worktreeDirectory: string, localBranch: string, upstream: { remote: string; branch: string }) => {
-  await runGitCommandOrThrow(
-    worktreeDirectory,
-    ['config', `branch.${localBranch}.remote`, upstream.remote],
-    `Failed to set branch.${localBranch}.remote`
-  );
-  await runGitCommandOrThrow(
-    worktreeDirectory,
-    ['config', `branch.${localBranch}.merge`, `refs/heads/${upstream.branch}`],
-    `Failed to set branch.${localBranch}.merge`
-  );
 };
 
 const applyUpstreamConfiguration = async (args: {
@@ -1689,23 +1738,19 @@ const applyUpstreamConfiguration = async (args: {
     return;
   }
 
-  let fetched = true;
   try {
     await fetchRemoteBranchRef(primaryWorktree, upstream.remote, upstream.branch);
   } catch {
-    fetched = false;
-  }
-
-  if (fetched) {
-    await runGitCommandOrThrow(
-      worktreeDirectory,
-      ['branch', `--set-upstream-to=${upstream.full}`, localBranch],
-      `Failed to set upstream to ${upstream.full}`
-    );
+    // Fetch failed: leave tracking unset. Do not write branch.*.remote/merge
+    // pointing at a ref that was never fetched.
     return;
   }
 
-  await setBranchTrackingFallback(worktreeDirectory, localBranch, upstream);
+  await runGitCommandOrThrow(
+    worktreeDirectory,
+    ['branch', `--set-upstream-to=${upstream.full}`, localBranch],
+    `Failed to set upstream to ${upstream.full}`
+  );
 };
 
 /**
@@ -1713,18 +1758,23 @@ const applyUpstreamConfiguration = async (args: {
  */
 export async function listGitWorktrees(directory: string): Promise<GitWorktreeInfo[]> {
   const directoryPath = normalizeDirectoryPath(directory);
-  if (!directoryPath || !fs.existsSync(directoryPath) || !fs.existsSync(path.join(directoryPath, '.git'))) {
+  // No `.git` path check here: a bare repository's git dir is the directory
+  // itself, and git still lists its worktrees from there. A non-repository
+  // fails the git command below and reads as an empty list all the same.
+  if (!directoryPath || !fs.existsSync(directoryPath)) {
     return [];
   }
 
   try {
     const result = await runGitCommandOrThrow(directoryPath, ['worktree', 'list', '--porcelain'], 'Failed to list git worktrees');
-    return parseWorktreePorcelain(result.stdout).map((entry) => ({
-      head: entry.head || '',
-      name: path.basename(entry.worktree || ''),
-      branch: entry.branch || '',
-      path: entry.worktree,
-    }));
+    return parseWorktreePorcelain(result.stdout)
+      .filter((entry) => entry.bare !== true)
+      .map((entry) => ({
+        head: entry.head || '',
+        name: path.basename(entry.worktree || ''),
+        branch: entry.branch || '',
+        path: entry.worktree,
+      }));
   } catch (error) {
     console.warn('[GitService] Failed to list worktrees, returning empty list:', error instanceof Error ? error.message : String(error));
     return [];
@@ -1752,7 +1802,7 @@ export async function validateWorktreeCreate(directory: string, input: CreateGit
         if (parsedExistingRemote && ensureRemoteName && ensureRemoteUrl && ensureRemoteName === parsedExistingRemote.remote) {
           const lsRemote = await runGitCommand(
             context.primaryWorktree,
-            ['ls-remote', '--heads', ensureRemoteUrl, `refs/heads/${parsedExistingRemote.branch}`]
+            ['ls-remote', '--heads', '--', ensureRemoteUrl, `refs/heads/${parsedExistingRemote.branch}`]
           );
           if (!lsRemote.success) {
             throw new Error(`Unable to query remote ${ensureRemoteName}`);
@@ -1843,7 +1893,7 @@ export async function validateWorktreeCreate(directory: string, input: CreateGit
       if (!upstreamRemote || !upstreamBranch) {
         errors.push({ code: 'upstream_incomplete', message: 'upstreamRemote and upstreamBranch are required when setUpstream is true' });
       } else {
-        const remoteExists = await runGitCommand(context.primaryWorktree, ['remote', 'get-url', upstreamRemote]);
+        const remoteExists = await runGitCommand(context.primaryWorktree, ['remote', 'get-url', '--', upstreamRemote]);
         if (!remoteExists.success && (!ensureRemoteName || ensureRemoteName !== upstreamRemote)) {
           errors.push({ code: 'remote_not_found', message: `Remote not found: ${upstreamRemote}` });
         }
@@ -2302,7 +2352,7 @@ export async function removeWorktree(directory: string, input: RemoveGitWorktree
 
   await waitForActiveWorktreeBootstrap(targetDirectory);
 
-  const context = await resolveWorktreeProjectContext(directory);
+  const context = await resolveWorktreeProjectContext(directory, { tolerateWorktreeRootConfigError: true });
   const deleteLocalBranch = input?.deleteLocalBranch === true;
 
   const targetCanonical = await canonicalPath(targetDirectory);
@@ -2325,12 +2375,22 @@ export async function removeWorktree(directory: string, input: RemoveGitWorktree
     return null;
   })();
 
-  const removeManagedOrphan = async () => {
-    // Only a leftover directory inside the managed worktree root may be deleted;
-    // an arbitrary unregistered path is never removed recursively.
+  const removeManagedOrphan = async ({ registered }: { registered: boolean }) => {
+    // The data-dir root is ours alone, so any leftover inside it may go. A
+    // configured worktree.directory can be shared (".." is the repository's
+    // parent, holding sibling projects), so there only a directory git had
+    // registered as this project's worktree is deleted; an unregistered one
+    // could be anything.
     const worktreeRootCanonical = await canonicalPath(context.worktreeRoot);
-    const isManagedOrphan = targetCanonical !== worktreeRootCanonical
+    const legacyWorktreeRootCanonical = context.legacyWorktreeRoot
+      ? await canonicalPath(context.legacyWorktreeRoot)
+      : null;
+    const insideLegacyRoot = legacyWorktreeRootCanonical !== null
+      && targetCanonical !== legacyWorktreeRootCanonical
+      && isInsideOrSameDirectory(legacyWorktreeRootCanonical, targetCanonical);
+    const insideConfiguredRoot = targetCanonical !== worktreeRootCanonical
       && isInsideOrSameDirectory(worktreeRootCanonical, targetCanonical);
+    const isManagedOrphan = insideLegacyRoot || (registered && insideConfiguredRoot);
     const targetExists = await checkPathExists(targetDirectory);
     if (targetExists && isManagedOrphan) {
       await removeBusyDirectory(targetDirectory);
@@ -2341,7 +2401,7 @@ export async function removeWorktree(directory: string, input: RemoveGitWorktree
   };
 
   if (!matchedEntry?.worktree) {
-    await removeManagedOrphan();
+    await removeManagedOrphan({ registered: false });
     clearWorktreeBootstrapState(targetDirectory);
 
     return true;
@@ -2354,7 +2414,7 @@ export async function removeWorktree(directory: string, input: RemoveGitWorktree
   const removedByGit = await removeGitWorktreeWhenFree(context.primaryWorktree, matchedEntry.worktree, targetCanonical);
   if (!removedByGit) {
     // Git deleted its registration but not the still-locked folder.
-    await removeManagedOrphan();
+    await removeManagedOrphan({ registered: true });
   }
 
   if (deleteLocalBranch) {
@@ -3060,7 +3120,7 @@ export async function gitPush(
         throw new Error(describePushFailure(error));
       }
 
-      const args = ['push', ...buildUpstreamOptions(gitOptions), fallbackRemote, currentBranch];
+      const args = ['push', ...buildUpstreamOptions(gitOptions), '--', fallbackRemote, currentBranch];
       await pushRaw(args);
       return normalizePushResult(currentBranch, fallbackRemote);
     }
@@ -3073,7 +3133,7 @@ export async function gitPush(
       const currentBranch = await getCurrentBranch();
       const tracking = await hasTrackingBranch();
       if (currentBranch && !tracking) {
-        const args = ['push', ...buildUpstreamOptions(gitOptions), remoteName, currentBranch];
+        const args = ['push', ...buildUpstreamOptions(gitOptions), '--', remoteName, currentBranch];
         await pushRaw(args);
         return normalizePushResult(currentBranch, remoteName);
       }
@@ -3083,7 +3143,7 @@ export async function gitPush(
   }
 
   try {
-    const args = ['push', ...normalizeGitOptions(gitOptions), remoteName];
+    const args = ['push', ...normalizeGitOptions(gitOptions), '--', remoteName];
     if (branch) {
       args.push(branch);
     }
@@ -3099,7 +3159,7 @@ export async function gitPush(
       throw new Error(describePushFailure(error));
     }
 
-    const args = ['push', ...buildUpstreamOptions(gitOptions), remoteName, fallbackBranch];
+    const args = ['push', ...buildUpstreamOptions(gitOptions), '--', remoteName, fallbackBranch];
     await pushRaw(args);
     return normalizePushResult(fallbackBranch, remoteName);
   }
@@ -3243,7 +3303,7 @@ export async function gitFetch(
 
   // Fallback to raw git
   const args = ['fetch'];
-  if (options?.remote) args.push(options.remote);
+  if (options?.remote) args.push('--', options.remote);
   if (options?.branch) args.push(options.branch);
 
   const result = await execGit(args, directory);
@@ -3364,6 +3424,14 @@ export async function getGitLog(
     }
 
     return { all: entries, latest: entries[0] || null, total: entries.length };
+  }
+
+  // A fresh `git init` sits on a branch with no commits yet: HEAD names a
+  // branch that does not resolve. Its history is empty, not an error.
+  if (!options?.to && (await execGit(['rev-parse', '--verify', '-q', 'HEAD'], directory)).exitCode !== 0) {
+    if ((await execGit(['symbolic-ref', '-q', 'HEAD'], directory)).exitCode === 0) {
+      return { all: [], latest: null, total: 0 };
+    }
   }
 
   // Prefer the local ref; fall back to origin/<from> only when the local ref
@@ -3680,12 +3748,6 @@ export async function setGitIdentity(
 
 // ============== Remote Operations ==============
 
-export interface GitRemote {
-  name: string;
-  fetchUrl: string;
-  pushUrl: string;
-}
-
 /**
  * Get list of remotes
  */
@@ -3694,27 +3756,7 @@ export async function getRemotes(directory: string): Promise<GitRemote[]> {
   if (result.exitCode !== 0) {
     return [];
   }
-
-  const remoteMap = new Map<string, GitRemote>();
-  const lines = result.stdout.split('\n').filter(Boolean);
-
-  for (const line of lines) {
-    const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
-    if (match) {
-      const [, name, url, type] = match;
-      if (!remoteMap.has(name)) {
-        remoteMap.set(name, { name, fetchUrl: '', pushUrl: '' });
-      }
-      const remote = remoteMap.get(name)!;
-      if (type === 'fetch') {
-        remote.fetchUrl = url;
-      } else {
-        remote.pushUrl = url;
-      }
-    }
-  }
-
-  return Array.from(remoteMap.values());
+  return parseGitRemoteListing(result.stdout);
 }
 
 export async function removeRemote(directory: string, remote: string): Promise<{ success: boolean }> {
@@ -3726,7 +3768,7 @@ export async function removeRemote(directory: string, remote: string): Promise<{
     throw new Error('Cannot remove origin remote');
   }
 
-  const result = await execGit(['remote', 'remove', remoteName], directory);
+  const result = await execGit(['remote', 'remove', '--', remoteName], directory);
   if (result.exitCode !== 0) {
     throw new Error(result.stderr || result.stdout || `Failed to remove remote ${remoteName}`);
   }
@@ -4076,7 +4118,7 @@ export async function canonicalizeWorktreeState(
 
   // Resolve worktree project context (worktreeRoot)
   try {
-    const context = await resolveWorktreeProjectContext(directoryPath);
+    const context = await resolveWorktreeProjectContext(directoryPath, { tolerateWorktreeRootConfigError: true });
     worktreeRoot = await canonicalizePath(context.worktreeRoot);
   } catch {
     worktreeStatus = 'invalid';

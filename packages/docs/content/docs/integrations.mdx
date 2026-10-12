@@ -22,29 +22,28 @@ Connect another Linear organization with **Add workspace**. One workspace is cur
 
 ### Browse issues
 
-Once a workspace is connected, the **Linear** panel appears in the right-hand context rail. It lists the current workspace's issues and lets you:
+Linear issues live on the **Issues and PRs** board. Open it with the pull-request icon in the sidebar header, or press <kbd>⌘K</kbd> then <kbd>B</kbd> (<kbd>Ctrl+K</kbd> then <kbd>B</kbd> on Windows and Linux), and choose **Linear** at the top. The board lists the current workspace's issues and lets you:
 
-- filter by status (**Backlog**, **To Do**, **In Progress**, **In Review**, **Done**, **Canceled**, **Duplicate**), assignee (**Anyone** or **Assigned to me**), team, and priority
-- search by title, identifier, or a Linear URL
-- open an issue to read its description, comments, labels, and priority
-- change its **Status** or **Close issue**
-- switch the current **Workspace**
+- show one team or **All teams**
+- switch the current workspace, when more than one is connected
+- filter by status, by whose issues they are (**Assigned to me** or **Created by me**), and by priority, all at once, and search by title or identifier
+- read an issue's description, comments, labels, and priority beside the list
+- change its **Status**
 
 ### Start a session from an issue
 
-- In the Linear panel, open an issue and choose **Start session**. The button stays in the footer while the issue scrolls.
-- In the chat, choose **New Session From Linear Issue** to pick one from the list, with **Create in worktree** if you want a fresh branch.
-- In the **New Worktree** dialog, choose **Start from Linear Issue**.
+- On the board, pick an issue and choose **Start in worktree…** for a fresh branch, or **New session** to work in the project as it is.
+- In the **New Worktree** dialog, pick a Linear issue.
 
-The session opens in the project mapped to the issue's team, with the issue as the first prompt. Map teams in the Linear card: **Default project** covers every team, and **Team projects** override it per team. An unmapped team asks you to map it first. The first message is built from the **Issue Review** magic prompt, which you can edit at **Settings → Magic Prompts → Linear**.
+Either way the session opens with the issue attached to the message box, and you write the first message yourself. The board starts it in the project mapped to the issue's team, shown next to **Start in**; pick another project there if you need to. Map teams in the Linear card: **Default project** covers every team, and **Team projects** override it per team. Without a mapping, the board uses the project it showed last.
 
 ### Link an issue to a message
 
-In the chat composer, choose **Link Linear Issue**. The issue rides along with your next message as context, and the session's work status panel keeps a link back to it.
+In the chat composer, open the **+** menu and choose **Linear**. The issue rides along with your next message as context, and the session's work status panel keeps a link back to it.
 
 ### Session comments
 
-Turn on **Session comments** in the Linear card and a session started from an issue posts a comment on that issue when it starts, finishes, or fails, each with a link that opens the session. Comments are only posted when this OpenChamber server has a public address, so the link works for everyone on the issue; on a local or private address nothing is posted.
+Turn on **Session comments** in the Linear card and a session started from an issue, or whose first message has the issue attached, posts a comment on that issue when it starts, finishes, or fails, each with a link that opens the session. Comments are only posted when this OpenChamber server has a public address, so the link works for everyone on the issue; on a local or private address nothing is posted.
 
 ## Install an integration
 
@@ -84,4 +83,3 @@ The card updates the extension when a new version is out, turns it back on if yo
 
 - [GitHub Issues & PRs](/github/) — everything GitHub can do in OpenChamber
 - [Worktree Sessions](/worktrees/) — where issue sessions can start
-- [Magic Prompts](/magic-prompts/) — edit the prompt a Linear session starts with

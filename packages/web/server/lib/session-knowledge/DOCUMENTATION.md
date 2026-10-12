@@ -66,6 +66,27 @@ Delivery is recorded only after the send is accepted. Recording it when the text
 is handed over would leave a failed send believing the agent had context it never
 received.
 
+## When to link
+
+A session whose agent has the managed `openchamber` tool (the setting is on and
+OpenChamber launched OpenCode) is also told when to link an issue or change to
+it with `session.link` (`SESSION_LINK_GUIDANCE`). The same rule leads the tool's
+own description. Stated only in the action's description it went unread: an
+agent handed an issue to investigate saw no reason to open a session-control
+tool, so it never linked anything. It rides the same signature (`l:on`), so it
+is sent once and again after compaction.
+
+## When to move into a worktree
+
+The same session is told when to leave a busy branch: a new task on a checkout
+whose branch already carries an open pull request or changes that are not the
+agent's. The form follows the `agentWorktreeMoveWithoutAsking` setting
+(`WORKTREE_MOVE_GUIDANCE.ask` offers the move and waits, `.auto` moves first and
+says so), read through `isWorktreeMoveWithoutAsking` and only while the tool is
+there. It is part of the signature (`w:ask`, `w:auto`), so flipping the setting
+re-sends the rule. The tool description carries the same text
+(`../agent-tool/runtime.js`, `WORKTREE_MOVE_RULES`); change both together.
+
 ## Entries that read as instructions
 
 Memory is the one place where text from outside can settle permanently. The

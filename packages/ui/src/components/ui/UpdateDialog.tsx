@@ -23,6 +23,8 @@ interface UpdateDialogProps {
   info: UpdateInfo | null;
   downloading: boolean;
   downloaded: boolean;
+  /** Desktop install is being applied — the restart is already in flight */
+  installing?: boolean;
   progress: UpdateProgress | null;
   error: string | null;
   onDownload: () => void;
@@ -117,6 +119,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   info,
   downloading,
   downloaded,
+  installing = false,
   progress,
   error,
   onDownload,
@@ -244,7 +247,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
 
           {/* Version Diff */}
           {(info?.currentVersion || info?.version) && (
-            <div className="flex items-center gap-2 font-mono text-sm ml-3">
+            <div className="flex items-center gap-2 font-mono text-sm ms-3">
               {info?.currentVersion && (
                 <span className="text-muted-foreground">{info.currentVersion}</span>
               )}
@@ -334,14 +337,14 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
             </div>
           )}
 
-          {/* Web runtime fallback command */}
-          {isWebRuntime && info?.packageManager !== 'electron' && webUpdateState === 'error' && (
+          {/* Web runtime fallback command; it would not update a copy no package manager installed */}
+          {isWebRuntime && info?.packageManager !== 'electron' && info?.installBlocked !== 'manual-install' && webUpdateState === 'error' && (
             <div className="space-y-2 mt-4">
               <div className="flex items-center gap-2 typography-meta text-muted-foreground">
                 <Icon name="terminal" className="h-4 w-4" />
                 <span>{t('updateDialog.fallback.updateViaTerminal')}</span>
               </div>
-              <div className="flex items-center gap-2 p-1 pl-3 bg-surface-elevated/50 rounded-md border border-border">
+              <div className="flex items-center gap-2 p-1 ps-3 bg-surface-elevated/50 rounded-md border border-border">
                 <code className="flex-1 font-mono text-sm text-foreground overflow-x-auto whitespace-nowrap">
                   {updateCommand}
                 </code>
@@ -423,7 +426,17 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               </button>
             )}
 
-            {!isWebRuntime && !isMobileRuntime && downloaded && (
+            {!isWebRuntime && !isMobileRuntime && downloaded && installing && (
+              <button
+                disabled
+                className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--status-success)]/50 text-white cursor-not-allowed"
+              >
+                <Icon name="loader" className="h-4 w-4 animate-spin" />
+                {t('updateDialog.status.restarting')}
+              </button>
+            )}
+
+            {!isWebRuntime && !isMobileRuntime && downloaded && !installing && (
               <button
                 onClick={onRestart}
                 className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--status-success)] text-white hover:opacity-90 transition-opacity"
