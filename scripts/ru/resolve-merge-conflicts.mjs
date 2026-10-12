@@ -223,6 +223,23 @@ const ensureRuModuleWiring = (file) => {
     changed = true;
   }
 
+  // Then put the block back in en.ts order. Imports carry no ordering semantics,
+  // but the whole point of this file is to read as the Russian twin of en.ts,
+  // and a block that drifted out of order is how the next reader gets misled.
+  const importIndexes = [];
+  lines.forEach((line, index) => {
+    if (MODULE_IMPORT_RE.test(line)) importIndexes.push(index);
+  });
+  if (importIndexes.length === enModules.length) {
+    enModules.forEach((entry, position) => {
+      const index = importIndexes[position];
+      if (lines[index] !== entry.line) {
+        lines[index] = entry.line;
+        changed = true;
+      }
+    });
+  }
+
   // Spreads, in en.ts order. One pass over the module list with a cursor on the
   // spread we last matched, so a newly inserted spread lands where upstream has
   // it rather than at the end of the block.
