@@ -44,12 +44,11 @@ jobs:
 
       # The whole point of the fork. A release must not ship a broken locale.
       # The fork guards and enhance tests catch upstream merges that silently
-      # drop our own edits, which a clean merge would not report.
-      - name: Verify the Russian locale and fork features
-        run: bun test packages/ui/src/lib/i18n packages/ui/src/lib/fork-guards.test.ts packages/ui/src/components/chat/hooks/useEnhancePrompt.test.ts packages/ui/src/lib/messages/enhancePrompt.test.ts
-
-      - name: Type-check the UI
-        run: bun run type-check:ui
+      # drop our own edits, which a clean merge would not report. The same
+      # gate runs in ru-upstream-sync.yml before `ru` is pushed, so the
+      # command below is the only copy of the check list.
+      - name: Run the release gate (locale, fork features, UI types)
+        run: node scripts/ru/verify-release-gate.mjs
 
       - name: Get bundled OpenCode CLI version
         id: opencode_cli_version
@@ -139,11 +138,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify the Russian locale and fork features
-        run: bun test packages/ui/src/lib/i18n packages/ui/src/lib/fork-guards.test.ts packages/ui/src/components/chat/hooks/useEnhancePrompt.test.ts packages/ui/src/lib/messages/enhancePrompt.test.ts
-
-      - name: Type-check the UI
-        run: bun run type-check:ui
+      # Same release gate as the Windows job and ru-upstream-sync.yml: the
+      # check list lives only in scripts/ru/verify-release-gate.mjs.
+      - name: Run the release gate (locale, fork features, UI types)
+        run: node scripts/ru/verify-release-gate.mjs
 
       - name: Get bundled OpenCode CLI version
         id: opencode_cli_version
