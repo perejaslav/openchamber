@@ -55,7 +55,6 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
   const originalRef = React.useRef<string | null>(null);
   const requestIdRef = React.useRef(0);
   const inFlightRef = React.useRef(false);
-  const cancelledRef = React.useRef(false);
   const optionsRef = React.useRef(options);
   optionsRef.current = options;
 
@@ -67,7 +66,6 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
     // The button shows a loader and overlapping requests are forbidden.
     if (inFlightRef.current) return false;
     inFlightRef.current = true;
-    cancelledRef.current = false;
     originalRef.current = source;
     // Draft snapshot at request time: the resolve-time check compares
     // against this, not the stored original (on re-run the input already
@@ -78,8 +76,9 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
     setIsEnhancing(true);
     try {
       const enhanced = await current.runEnhance({ draft: source, requestId });
-      // Cancelled while awaiting: drop the result.
-      if (cancelledRef.current) return false;
+      // Superseded (a cancel invalidated this id, possibly followed by a
+      // newer request): drop the result, never touch the input.
+      if (requestId !== requestIdRef.current) return false;
       // The user typed meanwhile: never overwrite their input.
       if (current.getDraft() !== draftAtRequest) {
         originalRef.current = null;
@@ -90,13 +89,20 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
       setCanRollback(true);
       return true;
     } catch (error) {
+      // A superseded request reports nothing: its UI is already owned by
+      // the cancel or the newer request.
+      if (requestId !== requestIdRef.current) return false;
       originalRef.current = null;
       setCanRollback(false);
       current.onError?.(error instanceof Error ? error : new Error('Enhance prompt request failed'));
       return false;
     } finally {
-      inFlightRef.current = false;
-      setIsEnhancing(false);
+      // A stale resolution must not clear a newer request's spinner or
+      // reopen the gate while it is still running.
+      if (requestId === requestIdRef.current) {
+        inFlightRef.current = false;
+        setIsEnhancing(false);
+      }
     }
   }, []);
 
@@ -111,7 +117,9 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
 
   const cancelEnhance = React.useCallback((): boolean => {
     if (!inFlightRef.current) return false;
-    cancelledRef.current = true;
+    // Invalidate the in-flight request id: a late resolution compares ids
+    // and drops its result instead of touching the input or the spinner.
+    requestIdRef.current += 1;
     inFlightRef.current = false;
     originalRef.current = null;
     setIsEnhancing(false);

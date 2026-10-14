@@ -148,6 +148,39 @@ describe('useEnhancePrompt', () => {
     await h.cleanup();
   }));
 
+  test('cancelled request resolving first does not clobber the next run', () => withDom(async () => {
+    const store = { text: 'draft' };
+    let releaseA!: (value: string) => void;
+    let releaseB!: (value: string) => void;
+    const gateA = new Promise<string>((resolve) => { releaseA = resolve; });
+    const gateB = new Promise<string>((resolve) => { releaseB = resolve; });
+    const runners = [() => gateA, () => gateB];
+    const h = await mountHook(store, () => runners.shift()?.() ?? Promise.resolve(''));
+    // Split act scopes: React flushes renders on scope exit, so each step
+    // observes settled state. One scope would read stale snapshots.
+    let pendingA!: Promise<boolean>;
+    await act(async () => { pendingA = h.get().requestEnhance(); });
+    await act(async () => { expect(h.get().handleEscape()).toBe(true); });
+    let pendingB!: Promise<boolean>;
+    await act(async () => { pendingB = h.get().requestEnhance(); });
+    expect(h.get().isEnhancing).toBe(true);
+    await act(async () => {
+      // Cancelled A resolves first: dropped, spinner stays for B.
+      releaseA('STALE A');
+      expect(await pendingA).toBe(false);
+    });
+    expect(store.text).toBe('draft');
+    expect(h.get().isEnhancing).toBe(true);
+    await act(async () => {
+      releaseB('FRESH B');
+      expect(await pendingB).toBe(true);
+    });
+    expect(store.text).toBe('FRESH B');
+    await act(async () => { expect(h.get().rollbackEnhance()).toBe(true); });
+    expect(store.text).toBe('draft');
+    await h.cleanup();
+  }));
+
   test('runner failure reports and keeps the draft', () => withDom(async () => {
     const store = { text: 'draft' };
     const errors: Error[] = [];
