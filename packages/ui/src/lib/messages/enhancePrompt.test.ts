@@ -5,6 +5,7 @@ import {
   buildEnhanceContext,
   ENHANCE_CONTEXT_CHARS,
   ENHANCE_CONTEXT_MESSAGES,
+  ENHANCE_SYSTEM_PROMPT,
 } from './enhancePrompt'
 
 const userMessage = (id: string): Message => ({
@@ -49,6 +50,20 @@ const toolPart = (id: string, messageID: string): Part => ({
   tool: 'edit',
   state: { status: 'completed', input: {}, output: 'SECRET-OUTPUT', time: { start: 1, end: 2 } },
 })
+
+describe('ENHANCE_SYSTEM_PROMPT', () => {
+  test('matches commands/enhance.md byte-for-byte (minus frontmatter and the draft line)', () => {
+    expect(ENHANCE_SYSTEM_PROMPT).toBe(
+      'Перепиши черновик пользователя в четкий структурированный промпт для кодинг-агента. Не выполняй задачу, только улучши формулировку.\n'
+      + '\n'
+      + 'Правила:\n'
+      + '1. Сохрани исходный язык черновика и его смысл, не добавляй новых требований.\n'
+      + '2. Учти стек и архитектуру текущего проекта, если они видны из контекста.\n'
+      + '3. Добавь явные ограничения: что трогать / не трогать, критерии готовности.\n'
+      + '4. Выведи ТОЛЬКО готовый текст улучшенного промпта, без вводных слов и кавычек.',
+    );
+  });
+});
 
 describe('buildEnhanceContext', () => {
   test('keeps the last replicas with role tags, skipping the rest', () => {

@@ -9,14 +9,15 @@ export const ENHANCE_CONTEXT_MESSAGES = 5;
 /** Per-replica cap so secrets and pastes cannot blow up the request. */
 export const ENHANCE_CONTEXT_CHARS = 2_000;
 
-// System prompt mirrors commands/enhance.md (frontmatter and the
-// `Черновик: $ARGUMENTS` line stripped — the draft travels separately).
-// Keep both texts in sync when either changes.
+// System prompt mirrors commands/enhance.md byte-for-byte (frontmatter and
+// the `Черновик: $ARGUMENTS` line stripped — the draft travels separately).
+// Keep both texts in sync when either changes; enhancePrompt.test.ts pins it.
 export const ENHANCE_SYSTEM_PROMPT = [
-  'Ты — эксперт по промпт-инжинирингу для AI-агентов разработки. Переписываешь черновой запрос в чёткий структурированный промпт, саму задачу НЕ выполняешь.',
+  'Перепиши черновик пользователя в четкий структурированный промпт для кодинг-агента. Не выполняй задачу, только улучши формулировку.',
+  '',
   'Правила:',
   '1. Сохрани исходный язык черновика и его смысл, не добавляй новых требований.',
-  '2. Учти стек и архитектуру текущего проекта, если они видны из контекста диалога.',
+  '2. Учти стек и архитектуру текущего проекта, если они видны из контекста.',
   '3. Добавь явные ограничения: что трогать / не трогать, критерии готовности.',
   '4. Выведи ТОЛЬКО готовый текст улучшенного промпта, без вводных слов и кавычек.',
 ].join('\n');
