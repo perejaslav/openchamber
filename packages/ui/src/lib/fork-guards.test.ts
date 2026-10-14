@@ -26,8 +26,11 @@ describe('fork guards: prompt enhance', () => {
 });
 
 describe('fork guards: model picker height', () => {
-    test('ModelControls keeps the 640px popup', () => {
-        expect(read('../components/chat/ModelControls.tsx')).toContain('min(640px,');
+    test('ModelControls keeps the viewport-fixed popup: 600px on small screens, 640px otherwise', () => {
+        const source = read('../components/chat/ModelControls.tsx');
+        expect(source).toContain('h-[min(600px,calc(100dvh-2rem))]');
+        expect(source).toContain('[@media(min-height:900px)]:h-[min(640px,calc(100dvh-2rem))]');
+        expect(source).toContain("collisionAvoidance={{ side: 'shift', align: 'shift' }}");
     });
 
     test('ModelPickerList keeps the 640px popup', () => {

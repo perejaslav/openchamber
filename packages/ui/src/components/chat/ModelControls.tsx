@@ -2666,11 +2666,14 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         </TooltipTrigger>
                         <DropdownMenuContent
                             side="top"
-                            className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col overflow-hidden"
+                            className="w-[min(380px,calc(100vw-2rem))] h-[min(600px,calc(100dvh-2rem))] max-h-[min(600px,calc(100dvh-2rem))] [@media(min-height:900px)]:h-[min(640px,calc(100dvh-2rem))] [@media(min-height:900px)]:max-h-[min(640px,calc(100dvh-2rem))] p-0 flex flex-col overflow-hidden"
                             align="end"
                             alignOffset={-40}
                             constrainToMain
-                            collisionAvoidance={{ side: 'none', align: 'shift' }}
+                            // Fixed height from the viewport, not from the trigger: shift keeps the top
+                            // side and moves the menu into the window, so the size never depends on where
+                            // the composer sits (centered in a new session, bottom in a dialog).
+                            collisionAvoidance={{ side: 'shift', align: 'shift' }}
                             onKeyDownCapture={handleModelShortcutKeyDownCapture}
                         >
                             {!selection && <div className="p-1 border-b border-border/40">
@@ -2735,7 +2738,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                         </div>
                                     );
                                 }}
-                                maxHeightClassName="max-h-[min(640px,calc(var(--available-height)-4rem))] flex-1"
+                                maxHeightClassName="flex-1 min-h-0"
                                 tooltipsEnabled={agentMenuOpen}
                                 onEscape={() => setAgentMenuOpen(false)}
                             />

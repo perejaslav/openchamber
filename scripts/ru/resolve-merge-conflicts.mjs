@@ -281,7 +281,7 @@ const MODEL_PICKER_HEIGHT_RULES = [
   {
     file: 'packages/ui/src/components/chat/ModelControls.tsx',
     from: 'maxHeightClassName="max-h-[min(400px,calc(var(--available-height)-4rem))] flex-1"',
-    to: 'maxHeightClassName="max-h-[min(640px,calc(var(--available-height)-4rem))] flex-1"',
+    to: 'maxHeightClassName="flex-1 min-h-0"',
   },
   {
     file: 'packages/ui/src/components/model-picker/ModelPickerList.tsx',
