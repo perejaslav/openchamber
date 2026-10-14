@@ -276,13 +276,11 @@ const localeOf = (file) => path.basename(file, '.ts');
  * 400px). При конфликте берётся версия апстрима и правка накладывается
  * заново. Если ожидаемой строки нет и нашей тоже нет — разметка изменилась,
  * resolve падает и синк открывает issue вместо угадывания.
+ *
+ * Только для файлов, где форк правит ровно одну строку. У попапа модели в
+ * ModelControls.tsx правок несколько — см. KEEP_CONFLICTED.
  */
 const MODEL_PICKER_HEIGHT_RULES = [
-  {
-    file: 'packages/ui/src/components/chat/ModelControls.tsx',
-    from: 'maxHeightClassName="max-h-[min(400px,calc(var(--available-height)-4rem))] flex-1"',
-    to: 'maxHeightClassName="flex-1 min-h-0"',
-  },
   {
     file: 'packages/ui/src/components/model-picker/ModelPickerList.tsx',
     from: "maxHeightClassName = 'max-h-[min(400px,calc(100dvh-12rem))] flex-1',",
@@ -291,6 +289,22 @@ const MODEL_PICKER_HEIGHT_RULES = [
 ];
 
 const isModelPickerHeightFile = (file) => MODEL_PICKER_HEIGHT_RULES.some((rule) => toGitPath(file) === rule.file);
+
+/**
+ * Файлы с правками форка, которые `takeTheirs` выкинул бы молча: там больше
+ * одной правки или правка, которую скрипт не умеет переложить заново. Конфликт
+ * в них остаётся, синк останавливается и открывает issue.
+ *
+ * - ModelControls.tsx — попап модели (высота, shift, список).
+ * - en.ts / ru.ts — enhance-ключи (`chat.chatInput.enhance.*`) и русская часть.
+ */
+const KEEP_CONFLICTED = new Set([
+  'packages/ui/src/components/chat/ModelControls.tsx',
+  'packages/ui/src/lib/i18n/messages/en.ts',
+  'packages/ui/src/lib/i18n/messages/ru.ts',
+]);
+
+const isKeptConflicted = (file) => KEEP_CONFLICTED.has(toGitPath(file));
 
 /** Re-apply the 640px picker height on top of upstream's version of the file. */
 const ensureModelPickerHeight = (file) => {
@@ -309,9 +323,14 @@ const main = () => {
 
   const resolved = [];
   const leftAlone = [];
+  const keptConflicted = new Set(conflicted.map(toGitPath).filter((file) => KEEP_CONFLICTED.has(file)));
 
   for (const file of conflicted) {
     const base = path.basename(file);
+    if (keptConflicted.has(toGitPath(file))) {
+      leftAlone.push(file);
+      continue;
+    }
     try {
       if (base === 'runtime.ts' && isIn(file, I18N_DIR)) {
         takeTheirs(file);
@@ -346,6 +365,7 @@ const main = () => {
   const messageFiles = fs.readdirSync(MESSAGES).filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'));
   for (const name of messageFiles) {
     const file = path.join(MESSAGES, name);
+    if (keptConflicted.has(toGitPath(file))) continue;
     if (name.endsWith('.i18n.ts')) {
       try {
         if (ensureRuBlock(file)) resolved.push(file);
@@ -365,10 +385,12 @@ const main = () => {
   // import and spread it — otherwise the flattened dictionary loses every key
   // the new module carries.
   const ruFile = path.join(MESSAGES, 'ru.ts');
-  try {
-    if (ensureRuModuleWiring(ruFile)) resolved.push(ruFile);
-  } catch (error) {
-    leftAlone.push(`${ruFile} (${error instanceof Error ? error.message : error})`);
+  if (!keptConflicted.has(toGitPath(ruFile))) {
+    try {
+      if (ensureRuModuleWiring(ruFile)) resolved.push(ruFile);
+    } catch (error) {
+      leftAlone.push(`${ruFile} (${error instanceof Error ? error.message : error})`);
+    }
   }
 
   for (const file of resolved) {

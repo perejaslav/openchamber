@@ -24,6 +24,8 @@
  *
  * Keys English no longer has are dropped (a stale translation of a removed key
  * fails the parity and type checks just as a missing one does) and reported.
+ * The exception is the fork-only keys in FORK_ONLY_KEY_RE: they stay, so a
+ * merge that lost them in en.ts fails the parity test instead of passing quietly.
  *
  * Usage:
  *   node scripts/ru/fill-missing-keys.mjs            # reconcile in place, JSON to stdout
@@ -41,6 +43,13 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const MESSAGES_DIR = path.join(REPO_ROOT, 'packages/ui/src/lib/i18n/messages');
 
 const MARKER = ' (не переведено)';
+
+/**
+ * Ключи, которых апстрим не знает (enhance-кнопка форка). Если их нет в en.ts,
+ * значит, мерж их потерял, а не апстрим удалил — поэтому в ru.ts они остаются.
+ * Тогда тест паритета падает и релиз не выходит, а не тихо теряет строки.
+ */
+const FORK_ONLY_KEY_RE = /^chat\.chatInput\.enhance\./;
 
 /** `chat.workStatus.telemetry.<metric>` — a metric label, length-capped at 16. */
 const TELEMETRY_LABEL_RE = /^chat\.workStatus\.telemetry\.[^.]+$/;
@@ -191,7 +200,7 @@ const main = () => {
     const enKeyList = [...enKeys.keys()];
     const ruKeyList = [...ruKeys.keys()];
     const missing = enKeyList.filter((key) => !ruKeys.has(key));
-    const dropped = ruKeyList.filter((key) => !enKeys.has(key));
+    const dropped = ruKeyList.filter((key) => !enKeys.has(key) && !FORK_ONLY_KEY_RE.test(key));
 
     const fillLine = (key) => {
       const source = enKeys.get(key);
@@ -211,7 +220,7 @@ const main = () => {
 
       for (let i = ruRange.end - 1; i >= ruRange.start; i -= 1) {
         const key = keyOf(ruLines[i]);
-        if (key !== null && !enKeys.has(key)) ruLines.splice(i, 1);
+        if (key !== null && !enKeys.has(key) && !FORK_ONLY_KEY_RE.test(key)) ruLines.splice(i, 1);
       }
 
       if (missing.length) {

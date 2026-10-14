@@ -23,6 +23,19 @@ describe('fork guards: prompt enhance', () => {
         expect(exists('../lib/messages/enhancePrompt.ts')).toBe(true);
         expect(exists('../components/chat/composer/ui/EnhancePromptButton.tsx')).toBe(true);
     });
+
+    test('enhance locale keys stay in en.ts and ru.ts', () => {
+        const keys = [
+            'chat.chatInput.enhance.label',
+            'chat.chatInput.enhance.toast.failed.title',
+            'chat.chatInput.enhance.toast.failed.description',
+            'chat.chatInput.enhance.toggleAria',
+        ];
+        for (const file of ['./i18n/messages/en.ts', './i18n/messages/ru.ts']) {
+            const source = read(file);
+            for (const key of keys) expect(source).toContain(`'${key}'`);
+        }
+    });
 });
 
 describe('fork guards: model picker height', () => {
