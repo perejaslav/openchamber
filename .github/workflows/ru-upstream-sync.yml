@@ -257,38 +257,25 @@ jobs:
           fi
           git commit -m "chore(ru): reconcile dictionaries after merging ${REF}"
 
-      - name: Run the locale tests and the type check
+      - name: Run the release gate before pushing
         if: steps.target.outputs.skip != 'true'
         run: |
           set -euo pipefail
 
-          if ! bun test packages/ui/src/lib/i18n > "$WORK_DIR/tests.txt" 2>&1; then
+          # The gate checks the merged tree after the dictionary commit, so a green run means exactly this state is safe to push.
+          if ! node scripts/ru/verify-release-gate.mjs > "$WORK_DIR/gate.txt" 2>&1; then
             {
-              echo "Тесты локали упали после мержа — релиз не выпускается."
+              echo "Гейт релиза упал после мержа — ветка не пушится, релиз не выпускается."
               echo
               echo '```'
-              tail -40 "$WORK_DIR/tests.txt"
+              tail -40 "$WORK_DIR/gate.txt"
               echo '```'
             } > "$WORK_DIR/reason.txt"
-            echo "::error::Тесты локали упали."
-            cat "$WORK_DIR/tests.txt"
+            echo "::error::Гейт релиза упал."
+            cat "$WORK_DIR/gate.txt"
             exit 1
           fi
-          tail -6 "$WORK_DIR/tests.txt"
-
-          if ! bun run type-check > "$WORK_DIR/typecheck.txt" 2>&1; then
-            {
-              echo "Типы не сходятся после мержа — релиз не выпускается."
-              echo
-              echo '```'
-              tail -40 "$WORK_DIR/typecheck.txt"
-              echo '```'
-            } > "$WORK_DIR/reason.txt"
-            echo "::error::type-check упал."
-            cat "$WORK_DIR/typecheck.txt"
-            exit 1
-          fi
-          tail -8 "$WORK_DIR/typecheck.txt"
+          tail -8 "$WORK_DIR/gate.txt"
 
       - name: Make sure nothing is left uncommitted
         if: steps.target.outputs.skip != 'true'
