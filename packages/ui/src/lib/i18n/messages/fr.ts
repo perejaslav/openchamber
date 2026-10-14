@@ -2236,6 +2236,8 @@ export const dict = {
   'chat.chatInput.focusMode.toggleAria': 'Activer/désactiver le mode focus',
   'chat.chatInput.focusMode.label': 'Mode focus',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': 'par {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Ouvrir l\'issue dans le navigateur',

@@ -197,6 +197,8 @@ import { runForkCommand } from './composer/submit/forkCommand';
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
 import { useEnhancePrompt } from './hooks/useEnhancePrompt';
+import { readEnhanceFallbackModel, runEnhancePrompt } from '@/lib/messages/enhancePrompt';
+import { getSessionConversationContext } from '@/sync/session-actions';
 import { useComposerDraft } from './composer/state/useComposerDraft';
 import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
@@ -1322,12 +1324,28 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, [attachedFiles.length, hasDrafts, hasLinkedReferences, isBtwActive]);
 
     // One-click draft enhancement: the hook owns the original/result state
-    // machine, ChatInput only wires IO. UX step: echo stub, replaced by the
-    // small_model call in the next plan step.
+    // machine, ChatInput only wires IO (small-model call with the last
+    // replicas as context, failure toast keeping the draft).
     const enhancePrompt = useEnhancePrompt({
-        runEnhance: async ({ draft }) => draft,
+        runEnhance: ({ draft, signal }) => {
+            const enhanceSessionId = (isBtwActive ? btwSessionId : currentSessionId) ?? null;
+            const fallback = readEnhanceFallbackModel();
+            return runEnhancePrompt({
+                draft,
+                signal,
+                context: enhanceSessionId ? getSessionConversationContext(enhanceSessionId) : '',
+                sessionId: enhanceSessionId,
+                fallbackProviderID: fallback.providerID,
+                fallbackModelID: fallback.modelID,
+            });
+        },
         getDraft: () => getCurrentInputSnapshot().message,
         setDraft: (text) => { setMessage(text); },
+        onError: () => {
+            toast.error(t('chat.chatInput.enhance.toast.failed.title'), {
+                description: t('chat.chatInput.enhance.toast.failed.description'),
+            });
+        },
     });
 
     // Keep a ref to handleSubmit so callbacks don't depend on it.

@@ -2506,6 +2506,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.focusMode.toggleAria": "Перемкнути режим фокусування",
   "chat.chatInput.focusMode.label": "Режим фокусування",
   "chat.chatInput.enhance.label": "Enhance prompt",
+  "chat.chatInput.enhance.toast.failed.title": "Could not improve the prompt",
+  "chat.chatInput.enhance.toast.failed.description": "The enhancement request failed. Your draft is unchanged.",
   "chat.chatInput.enhance.toggleAria": "Enhance prompt draft",
   "chat.chatInput.linked.byAuthor": "за {author}",
   "chat.chatInput.linked.issue.openInBrowserAria": "Відкрити issue в браузері",

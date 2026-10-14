@@ -9,7 +9,13 @@ export type EnhancePromptRunnerInput = {
   draft: string;
   /** Monotonic id of the request, for logging/debugging. */
   requestId: number;
+  /** Aborted on cancel and on timeout: the runner must pass it to the model
+   *  call so no tokens are spent after the result became useless. */
+  signal: AbortSignal;
 };
+
+/** Timeout of one enhance request; shares the runner signal (plan §6). */
+export const ENHANCE_REQUEST_TIMEOUT_MS = 20_000;
 
 export type EnhancePromptRunner = (input: EnhancePromptRunnerInput) => Promise<string>;
 
@@ -45,6 +51,9 @@ export type UseEnhancePrompt = {
  * - `requestEnhance` stores the draft, runs the injected runner once, and
  *   replaces the draft with the result. A result is discarded (input left
  *   untouched) when the request was cancelled or the user typed meanwhile.
+ * - Every request gets an AbortSignal aborted on cancel and after
+ *   ENHANCE_REQUEST_TIMEOUT_MS: the runner must forward it so a dropped
+ *   request stops the model call instead of only dropping its UI.
  * - Re-running always starts from the stored original, not the enhanced text.
  * - `markEdited` must be called for user-originated edits only
  *   (fromValueProp changes are programmatic and skip it).
@@ -55,6 +64,7 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
   const originalRef = React.useRef<string | null>(null);
   const requestIdRef = React.useRef(0);
   const inFlightRef = React.useRef(false);
+  const abortRef = React.useRef<AbortController | null>(null);
   const optionsRef = React.useRef(options);
   optionsRef.current = options;
 
@@ -72,10 +82,15 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
     // holds the previous enhanced text).
     const draftAtRequest = current.getDraft();
     const requestId = (requestIdRef.current += 1);
+    // One signal carries both cancel and the 20 s timeout, so a dropped
+    // request stops spending model tokens instead of only dropping its UI.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeout = setTimeout(() => controller.abort(), ENHANCE_REQUEST_TIMEOUT_MS);
     setCanRollback(false);
     setIsEnhancing(true);
     try {
-      const enhanced = await current.runEnhance({ draft: source, requestId });
+      const enhanced = await current.runEnhance({ draft: source, requestId, signal: controller.signal });
       // Superseded (a cancel invalidated this id, possibly followed by a
       // newer request): drop the result, never touch the input.
       if (requestId !== requestIdRef.current) return false;
@@ -97,6 +112,7 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
       current.onError?.(error instanceof Error ? error : new Error('Enhance prompt request failed'));
       return false;
     } finally {
+      clearTimeout(timeout);
       // A stale resolution must not clear a newer request's spinner or
       // reopen the gate while it is still running.
       if (requestId === requestIdRef.current) {
@@ -120,6 +136,10 @@ export function useEnhancePrompt(options: UseEnhancePromptOptions): UseEnhancePr
     // Invalidate the in-flight request id: a late resolution compares ids
     // and drops its result instead of touching the input or the spinner.
     requestIdRef.current += 1;
+    // Abort the model call itself, not just its UI: the timeout shares this
+    // controller, and aborting a settled controller is a no-op.
+    abortRef.current?.abort();
+    abortRef.current = null;
     inFlightRef.current = false;
     originalRef.current = null;
     setIsEnhancing(false);

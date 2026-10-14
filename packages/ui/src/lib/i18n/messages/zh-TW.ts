@@ -2515,6 +2515,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.focusMode.toggleAria': '切換專注模式',
   'chat.chatInput.focusMode.label': '專注模式',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '由 {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': '在瀏覽器中開啟 Issue',

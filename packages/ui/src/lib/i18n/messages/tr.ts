@@ -2370,6 +2370,8 @@ export const dict = {
   'chat.chatInput.focusMode.toggleAria': 'Odak modunu aç/kapat',
   'chat.chatInput.focusMode.label': 'Odak modu',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '{author} tarafından',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Issue\'ı tarayıcıda aç',

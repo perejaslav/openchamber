@@ -2540,6 +2540,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.focusMode.toggleAria': '집중 모드 전환',
   'chat.chatInput.focusMode.label': '집중 모드',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '작성자: {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': '브라우저에서 이슈 열기',

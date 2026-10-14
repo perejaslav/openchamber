@@ -2684,6 +2684,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.focusMode.toggleAria': 'Переключить режим фокуса',
   'chat.chatInput.focusMode.label': 'Режим фокуса',
   'chat.chatInput.enhance.label': 'Улучшить промпт',
+  'chat.chatInput.enhance.toast.failed.title': 'Не удалось улучшить промпт',
+  'chat.chatInput.enhance.toast.failed.description': 'Запрос улучшения не выполнен. Черновик не изменён.',
   'chat.chatInput.enhance.toggleAria': 'Улучшить черновик',
   'chat.chatInput.linked.byAuthor': 'от {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Открыть задачу в браузере',

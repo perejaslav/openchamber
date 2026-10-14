@@ -1385,6 +1385,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.fileFallback': 'file',
   'chat.chatInput.focusMode.label': 'Focus mode',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.focusMode.toggleAria': 'Toggle focus mode',
   'chat.chatInput.linked.byAuthor': 'by {author}',

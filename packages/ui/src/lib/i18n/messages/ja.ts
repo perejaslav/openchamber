@@ -2536,6 +2536,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.focusMode.toggleAria': 'フォーカスモードの切り替え',
   'chat.chatInput.focusMode.label': 'フォーカスモード',
   'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toast.failed.title': 'Could not improve the prompt',
+  'chat.chatInput.enhance.toast.failed.description': 'The enhancement request failed. Your draft is unchanged.',
   'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '{author}による',
   'chat.chatInput.linked.issue.openInBrowserAria': 'ブラウザでIssueを開く',

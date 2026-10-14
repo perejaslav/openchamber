@@ -181,6 +181,42 @@ describe('useEnhancePrompt', () => {
     await h.cleanup();
   }));
 
+  test('cancel aborts the runner signal', () => withDom(async () => {
+    const store = { text: 'draft' };
+    let release!: (value: string) => void;
+    let seenSignal: AbortSignal | null = null;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    const h = await mountHook(store, (input) => {
+      seenSignal = input.signal;
+      return gate;
+    });
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = h.get().requestEnhance(); });
+    expect(seenSignal).not.toBeNull();
+    expect(seenSignal!.aborted).toBe(false);
+    await act(async () => { expect(h.get().handleEscape()).toBe(true); });
+    expect(seenSignal!.aborted).toBe(true);
+    await act(async () => {
+      release('late');
+      expect(await pending).toBe(false);
+    });
+    expect(store.text).toBe('draft');
+    await h.cleanup();
+  }));
+
+  test('settled request keeps its signal intact (timeout cleared)', () => withDom(async () => {
+    const store = { text: 'draft' };
+    let seenSignal: AbortSignal | null = null;
+    const h = await mountHook(store, (input) => {
+      seenSignal = input.signal;
+      return Promise.resolve('ENHANCED');
+    });
+    expect(await h.request()).toBe(true);
+    expect(store.text).toBe('ENHANCED');
+    expect(seenSignal!.aborted).toBe(false);
+    await h.cleanup();
+  }));
+
   test('runner failure reports and keeps the draft', () => withDom(async () => {
     const store = { text: 'draft' };
     const errors: Error[] = [];
