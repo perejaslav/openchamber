@@ -3,6 +3,7 @@ import { settingsDict } from './ru.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
+import { projectKnowledgeI18n } from './project-knowledge.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
 import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
@@ -12,6 +13,7 @@ import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
+import { projectActionsI18n } from './project-actions.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
@@ -491,6 +493,7 @@ export const dict: Record<I18nKey, string> = {
   ...linearIssuePickerI18n.ru,
   ...referencePickerI18n.ru,
   ...sessionMenuHintsI18n.ru,
+  ...projectKnowledgeI18n.ru,
   ...linearPanelI18n.ru,
   ...routingI18n.ru,
   ...pluginPanelI18n.ru,
@@ -500,6 +503,7 @@ export const dict: Record<I18nKey, string> = {
   ...webSearchI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
+  ...projectActionsI18n.ru,
   ...environmentI18n.ru,
   ...providersI18n.ru,
   ...mcpGridI18n.ru,
