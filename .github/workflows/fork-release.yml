@@ -65,6 +65,13 @@ jobs:
         working-directory: packages/electron
         run: bun run build:web-assets
 
+      # The install script (scripts/ru/install-desktop-locale.ps1) reports
+      # PATCHED only when web-dist carries the marker file. Stamp the same
+      # marker CI-side so release builds are recognised without apply.
+      - name: Stamp the Russian locale marker
+        shell: bash
+        run: printf 'ru %s release build\n' "${{ github.ref_name }}" > packages/electron/resources/web-dist/.openchamber-locale-patch
+
       - name: Prepare bundled OpenCode CLI
         working-directory: packages/electron
         shell: bash
@@ -146,6 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           bun run build:web-assets
+          printf 'ru %s release build\n' "${{ github.ref_name }}" > resources/web-dist/.openchamber-locale-patch
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
           bun run bundle:main
