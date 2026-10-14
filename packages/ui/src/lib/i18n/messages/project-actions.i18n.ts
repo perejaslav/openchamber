@@ -211,5 +211,17 @@ export const projectActionsI18n = {
     'commandPalette.item.stopProjectAction': 'עצירה: {name}',
   },
   ru: {
+    'settings.openchamber.keyboardShortcuts.action.open_project_actions.label': 'Open project actions (не переведено)',
+    'helpDialog.item.openProjectActions': 'Run or stop a project action (не переведено)',
+    'projectActions.dialog.title': 'Project actions (не переведено)',
+    'projectActions.dialog.description': 'Run or stop an action of the current project. (не переведено)',
+    'projectActions.dialog.placeholder': 'Search actions (не переведено)',
+    'projectActions.dialog.empty': 'No matching actions (не переведено)',
+    'projectActions.dialog.noProject': 'Open a session in a project to run its actions. (не переведено)',
+    'projectActions.dialog.configure': 'Configure actions (не переведено)',
+    'projectActions.dialog.footer.toggle': 'run or stop (не переведено)',
+    'commandPalette.item.openProjectActions': 'Project actions (не переведено)',
+    'commandPalette.item.runProjectAction': 'Run: {name} (не переведено)',
+    'commandPalette.item.stopProjectAction': 'Stop: {name} (не переведено)',
   },
 } as const;
