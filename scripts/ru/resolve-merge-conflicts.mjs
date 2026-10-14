@@ -271,6 +271,38 @@ const isLocaleDictionary = (file) => {
 
 const localeOf = (file) => path.basename(file, '.ts');
 
+/**
+ * Высота попапа выбора модели — форк-предпочтение (640px вместо апстримных
+ * 400px). При конфликте берётся версия апстрима и правка накладывается
+ * заново. Если ожидаемой строки нет и нашей тоже нет — разметка изменилась,
+ * resolve падает и синк открывает issue вместо угадывания.
+ */
+const MODEL_PICKER_HEIGHT_RULES = [
+  {
+    file: 'packages/ui/src/components/chat/ModelControls.tsx',
+    from: 'maxHeightClassName="max-h-[min(400px,calc(var(--available-height)-4rem))] flex-1"',
+    to: 'maxHeightClassName="max-h-[min(640px,calc(var(--available-height)-4rem))] flex-1"',
+  },
+  {
+    file: 'packages/ui/src/components/model-picker/ModelPickerList.tsx',
+    from: "maxHeightClassName = 'max-h-[min(400px,calc(100dvh-12rem))] flex-1',",
+    to: "maxHeightClassName = 'max-h-[min(640px,calc(100dvh-12rem))] flex-1',",
+  },
+];
+
+const isModelPickerHeightFile = (file) => MODEL_PICKER_HEIGHT_RULES.some((rule) => toGitPath(file) === rule.file);
+
+/** Re-apply the 640px picker height on top of upstream's version of the file. */
+const ensureModelPickerHeight = (file) => {
+  const rule = MODEL_PICKER_HEIGHT_RULES.find((candidate) => toGitPath(file) === candidate.file);
+  if (!rule) fail(`${file}: нет правила высоты пикера — разметка файлов изменилась, нужна ручная правка`);
+  const source = fs.readFileSync(file, 'utf8');
+  if (source.includes(rule.to)) return false;
+  if (!source.includes(rule.from)) fail(`${file}: нет ни апстримной, ни форк-строки высоты — нужна ручная правка`);
+  fs.writeFileSync(file, source.replace(rule.from, rule.to), 'utf8');
+  return true;
+};
+
 const main = () => {
   const unresolved = gitOrNull('diff', '--name-only', '--diff-filter=U') ?? '';
   const conflicted = unresolved ? unresolved.split('\n').filter(Boolean) : [];
@@ -296,6 +328,10 @@ const main = () => {
       } else if (isLocaleDictionary(file)) {
         takeTheirs(file);
         ensureRussianLabel(file, localeOf(file));
+        resolved.push(file);
+      } else if (isModelPickerHeightFile(file)) {
+        takeTheirs(file);
+        ensureModelPickerHeight(file);
         resolved.push(file);
       } else {
         leftAlone.push(file);

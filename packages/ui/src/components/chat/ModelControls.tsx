@@ -2735,7 +2735,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                         </div>
                                     );
                                 }}
-                                maxHeightClassName="max-h-[min(400px,calc(var(--available-height)-4rem))] flex-1"
+                                maxHeightClassName="max-h-[min(640px,calc(var(--available-height)-4rem))] flex-1"
                                 tooltipsEnabled={agentMenuOpen}
                                 onEscape={() => setAgentMenuOpen(false)}
                             />

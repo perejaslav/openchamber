@@ -533,7 +533,7 @@ export const ModelPickerList: React.FC<ModelPickerListProps> = ({
   onSelectNone,
   selectionCount,
   disabled = false,
-  maxHeightClassName = 'max-h-[min(400px,calc(100dvh-12rem))] flex-1',
+  maxHeightClassName = 'max-h-[min(640px,calc(100dvh-12rem))] flex-1',
   maxHeightStyle,
   sectionHeaderClassName,
   rowClassName,
