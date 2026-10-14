@@ -268,7 +268,9 @@ gh workflow list -R perejaslav/openchamber --all
 Файлы с правками форка, которых скрипт не умеет переложить заново, он не трогает
 вовсе — `KEEP_CONFLICTED` в резолвере: `ModelControls.tsx` (попап модели), `en.ts` и
 `ru.ts` (enhance-ключи). Конфликт там останавливает синк и создаёт issue, тихой
-потери правок не будет. `fill-missing-keys.mjs` при этом не удаляет enhance-ключи
+потери правок не будет. В остальных словарях резолвер берёт версию апстрима и
+возвращает enhance-строки из `HEAD` (`ensureForkOnlyKeys`). `fill-missing-keys.mjs`
+при этом не удаляет enhance-ключи
 (`FORK_ONLY_KEY_RE`) из `ru.ts`, даже если их нет в `en.ts`: тогда падает тест
 паритета, и гейт релиза не пропускает сборку.
 

@@ -20,6 +20,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { FORK_ONLY_KEY_RE } from './fork-keys.mjs';
 
 const I18N_DIR = 'packages/ui/src/lib/i18n';
 const MESSAGES = `${I18N_DIR}/messages`;
@@ -101,6 +102,40 @@ const ensureRussianLabel = (file, locale) => {
   if (spreadIndex < 0) fail(`${file}: не найден блок спредов`);
 
   lines.splice(spreadIndex, 0, `  '${RUSSIAN_LABEL_KEY}': '${label}',`);
+  writeLines(file, lines);
+  return true;
+};
+
+/** `'key': …` or `"key": …` at the start of a dictionary line. */
+const KEY_LINE_RE = /^\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\s*:/;
+const keyOfLine = (line) => {
+  const match = line.match(KEY_LINE_RE);
+  if (!match) return null;
+  return match[1] !== undefined ? match[1] : match[2];
+};
+
+/**
+ * Fork-only строки (`chat.chatInput.enhance.*`) есть в каждом словаре, а апстрим
+ * их не знает. При takeTheirs они выпадают, поэтому возвращаем их из HEAD — версии
+ * форка до мержа — и вставляем перед спредами, как русскую метку.
+ */
+const ensureForkOnlyKeys = (file) => {
+  const ours = gitOrNull('show', `HEAD:${toGitPath(file)}`);
+  if (!ours) return false;
+  const forkLines = ours.split('\n').filter((line) => {
+    const key = keyOfLine(line);
+    return key !== null && FORK_ONLY_KEY_RE.test(key);
+  });
+  if (!forkLines.length) return false;
+
+  const lines = readLines(file);
+  const present = new Set(lines.map(keyOfLine));
+  const missing = forkLines.filter((line) => !present.has(keyOfLine(line)));
+  if (!missing.length) return false;
+
+  const spreadIndex = lines.findIndex((line) => /^\s*\.\.\./.test(line));
+  if (spreadIndex < 0) fail(`${file}: не найден блок спредов`);
+  lines.splice(spreadIndex, 0, ...missing);
   writeLines(file, lines);
   return true;
 };
@@ -347,6 +382,7 @@ const main = () => {
       } else if (isLocaleDictionary(file)) {
         takeTheirs(file);
         ensureRussianLabel(file, localeOf(file));
+        ensureForkOnlyKeys(file);
         resolved.push(file);
       } else if (isModelPickerHeightFile(file)) {
         takeTheirs(file);

@@ -38,18 +38,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FORK_ONLY_KEY_RE } from './fork-keys.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MESSAGES_DIR = path.join(REPO_ROOT, 'packages/ui/src/lib/i18n/messages');
 
 const MARKER = ' (не переведено)';
 
-/**
- * Ключи, которых апстрим не знает (enhance-кнопка форка). Если их нет в en.ts,
- * значит, мерж их потерял, а не апстрим удалил — поэтому в ru.ts они остаются.
- * Тогда тест паритета падает и релиз не выходит, а не тихо теряет строки.
- */
-const FORK_ONLY_KEY_RE = /^chat\.chatInput\.enhance\./;
 
 /** `chat.workStatus.telemetry.<metric>` — a metric label, length-capped at 16. */
 const TELEMETRY_LABEL_RE = /^chat\.workStatus\.telemetry\.[^.]+$/;
