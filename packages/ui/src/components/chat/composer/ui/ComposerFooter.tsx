@@ -26,6 +26,7 @@ import { isDictationCaptureSupported } from '@/lib/dictation/use-dictation-audio
 import { ModelControls } from '../../ModelControls';
 import { ComposerActionButtons } from './ComposerActionButtons';
 import { ComposerAttachmentControls } from './ComposerAttachmentControls';
+import { EnhancePromptButton } from './EnhancePromptButton';
 import { FocusModeButton } from './FocusModeButton';
 import { PermissionAutoAcceptButton } from './PermissionAutoAcceptButton';
 import type { PermissionMode } from '@/stores/utils/permissionAutoAccept';
@@ -70,6 +71,10 @@ interface ComposerFooterProps {
     onOpenAttachSheet: () => void;
     onToggleExpandedInput: () => void;
     onCyclePermissionMode: () => void;
+    /** One-click draft enhancement (desktop footer). Absent on mobile/btw. */
+    onEnhancePrompt?: () => void;
+    enhancePromptIsEnhancing?: boolean;
+    enhancePromptDisabled?: boolean;
     onPrimaryAction: () => void;
     onQueueMessage: () => void;
     onAbort: () => void;
@@ -142,6 +147,9 @@ function ComposerFooterView(props: ComposerFooterProps) {
         onOpenAttachSheet,
         onToggleExpandedInput,
         onCyclePermissionMode,
+        onEnhancePrompt,
+        enhancePromptIsEnhancing = false,
+        enhancePromptDisabled = false,
         onPrimaryAction,
         onQueueMessage,
         onAbort,
@@ -279,6 +287,13 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             iconSizeClass={iconSizeClass}
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
+                        /> : null}
+                        {!isBtw && onEnhancePrompt ? <EnhancePromptButton
+                            footerIconButtonClass={footerIconButtonClass}
+                            iconSizeClass={iconSizeClass}
+                            isEnhancing={enhancePromptIsEnhancing}
+                            disabled={enhancePromptDisabled}
+                            onEnhance={onEnhancePrompt}
                         /> : null}
                         <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}

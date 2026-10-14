@@ -2539,6 +2539,8 @@ export const dict = {
   'chat.chatInput.actions.stopGeneratingAria': 'Stop generating',
   'chat.chatInput.focusMode.toggleAria': 'Toggle focus mode',
   'chat.chatInput.focusMode.label': 'Focus mode',
+  'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': 'by {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Open issue in browser',
   'chat.chatInput.linked.issue.removeAria': 'Remove linked issue',

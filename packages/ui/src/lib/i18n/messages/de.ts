@@ -2273,6 +2273,8 @@ export const dict = {
   'chat.chatInput.actions.stopGeneratingAria': 'Generierung stoppen',
   'chat.chatInput.focusMode.toggleAria': 'Fokusmodus umschalten',
   'chat.chatInput.focusMode.label': 'Fokusmodus',
+  'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': 'von {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Issue im Browser öffnen',
   'chat.chatInput.linked.issue.removeAria': 'Verknüpftes Issue entfernen',

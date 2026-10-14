@@ -1330,6 +1330,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'Önceki favori modele geç',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'Model seçiciyi aç',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Girdiyi genişlet',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'Konuşma zaman çizelgesini aç',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Prompt gezginini aç/kapat',
   'settings.projects.sidebar.total': 'Toplam {count}',

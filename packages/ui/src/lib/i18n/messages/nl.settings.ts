@@ -1365,6 +1365,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'Favoriet model achteruit doorlopen',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'Modelkiezer openen',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Invoer vergroten',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'Gesprekstijdlijn openen',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Promptnavigator in-/uitschakelen',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'Deze reeks deelt een contextueel voorvoegsel met {action}. Die actie heeft voorrang zolang de bijbehorende context actief is.',

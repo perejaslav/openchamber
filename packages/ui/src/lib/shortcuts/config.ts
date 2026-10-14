@@ -148,6 +148,12 @@ const SHORTCUT_GROUPS = {
       settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.expand_input.label',
     },
     {
+      id: 'enhance_prompt',
+      defaultBinding: 'mod+alt+e',
+      customizable: true,
+      settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label',
+    },
+    {
       id: 'toggle_dictation',
       defaultBinding: 'mod+alt+v',
       customizable: true,

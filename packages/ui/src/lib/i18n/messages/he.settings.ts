@@ -1364,6 +1364,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'המודל המועדף הקודם',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'פתח את בורר המודלים',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'הרחב את שדה הקלט',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'פתח את ציר הזמן של השיחה',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'הצג/הסתר את ניווט ההנחיות',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'לרצף הזה יש תחילית משותפת עם {action}. כשההקשר של הפעולה הזו פעיל, היא מקבלת עדיפות.',

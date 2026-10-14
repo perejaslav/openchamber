@@ -1185,6 +1185,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'Переключить избранную модель назад',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'Открыть выбор модели',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Развернуть поле ввода',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Улучшить промпт',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'Открыть хронологию беседы',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Показать/скрыть навигатор по промптам',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'Эта последовательность имеет общий контекстный префикс с {action}. Это действие имеет приоритет, пока активен его контекст.',

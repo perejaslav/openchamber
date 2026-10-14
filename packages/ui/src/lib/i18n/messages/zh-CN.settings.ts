@@ -1332,6 +1332,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': '向后轮换收藏模型',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': '打开模型选择器',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': '展开输入框',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': '打开对话时间线',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': '显示或隐藏提示词导航',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': '此序列与“{action}”共享上下文前缀。对应上下文生效时，该操作会优先执行。',

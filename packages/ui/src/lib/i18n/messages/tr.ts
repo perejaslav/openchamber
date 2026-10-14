@@ -2369,6 +2369,8 @@ export const dict = {
   'chat.chatInput.actions.stopGeneratingAria': 'Üretmeyi durdur',
   'chat.chatInput.focusMode.toggleAria': 'Odak modunu aç/kapat',
   'chat.chatInput.focusMode.label': 'Odak modu',
+  'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '{author} tarafından',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Issue\'ı tarayıcıda aç',
   'chat.chatInput.linked.issue.removeAria': 'Bağlı issue\'ı kaldır',

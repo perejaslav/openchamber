@@ -2505,6 +2505,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.chatInput.actions.stopGeneratingAria": "Parar geração",
   "chat.chatInput.focusMode.toggleAria": "Ativar ou desativar modo de foco",
   "chat.chatInput.focusMode.label": "Modo de foco",
+  "chat.chatInput.enhance.label": "Enhance prompt",
+  "chat.chatInput.enhance.toggleAria": "Enhance prompt draft",
   "chat.chatInput.linked.byAuthor": "por {author}",
   "chat.chatInput.linked.issue.openInBrowserAria": "Abrir issue no navegador",
   "chat.chatInput.linked.issue.removeAria": "Excluir issue vinculado",

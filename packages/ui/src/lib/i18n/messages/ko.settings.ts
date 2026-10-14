@@ -1332,6 +1332,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': '즐겨찾기 모델 뒤로 순환',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': '모델 선택기 열기',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': '입력 확장',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': '대화 타임라인 열기',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': '프롬프트 탐색기 표시/숨기기',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': '이 시퀀스는 {action}과 컨텍스트 접두사를 공유합니다. 해당 컨텍스트가 활성화된 동안에는 그 동작이 우선합니다.',

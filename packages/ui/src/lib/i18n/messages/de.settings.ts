@@ -1306,6 +1306,7 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'Favorites Modell rückwärts durchschalten',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'Modellauswahl öffnen',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Eingabe erweitern',
+  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'Konversations-Zeitleiste öffnen',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Prompt-Navigator umschalten',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'Diese Sequenz teilt ein kontextabhängiges Präfix mit {action}. Wenn dessen Kontext aktiv ist, hat diese Aktion Vorrang.',

@@ -1384,6 +1384,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.drop.insertMention': 'Drop to insert as mention',
   'chat.chatInput.fileFallback': 'file',
   'chat.chatInput.focusMode.label': 'Focus mode',
+  'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.focusMode.toggleAria': 'Toggle focus mode',
   'chat.chatInput.linked.byAuthor': 'by {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': 'Otwórz zgłoszenie w przeglądarce',

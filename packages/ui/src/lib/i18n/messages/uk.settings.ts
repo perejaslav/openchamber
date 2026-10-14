@@ -1332,6 +1332,7 @@ export const settingsDict = {
   "settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label": "Перемкнути улюблену модель назад",
   "settings.openchamber.keyboardShortcuts.action.open_model_selector.label": "Відкрити вибір моделі",
   "settings.openchamber.keyboardShortcuts.action.expand_input.label": "Розгорнути введення",
+  "settings.openchamber.keyboardShortcuts.action.enhance_prompt.label": "Enhance prompt",
   "settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label": "Відкрити хронологію розмови",
   "settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label": "Показати або приховати навігатор промптів",
   "settings.openchamber.keyboardShortcuts.warning.contextualPrefix": "Ця послідовність має спільний контекстний префікс із дією {action}. Коли її контекст активний, ця дія має пріоритет.",

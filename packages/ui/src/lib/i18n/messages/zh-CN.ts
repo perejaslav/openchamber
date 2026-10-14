@@ -2505,6 +2505,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.chatInput.actions.stopGeneratingAria': '停止生成',
   'chat.chatInput.focusMode.toggleAria': '切换专注模式',
   'chat.chatInput.focusMode.label': '专注模式',
+  'chat.chatInput.enhance.label': 'Enhance prompt',
+  'chat.chatInput.enhance.toggleAria': 'Enhance prompt draft',
   'chat.chatInput.linked.byAuthor': '由 {author}',
   'chat.chatInput.linked.issue.openInBrowserAria': '在浏览器中打开 Issue',
   'chat.chatInput.linked.issue.removeAria': '移除已关联的 Issue',
