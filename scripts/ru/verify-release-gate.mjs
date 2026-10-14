@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Release gate of the RU fork: locale parity, fork-feature guards, enhance
- * tests and the UI type-check. Runs before pushing `ru`
+ * tests and the type-check of all packages. Runs before pushing `ru`
  * (`ru-upstream-sync.yml`) and before building a release
  * (`fork-release.yml`) — one command, one place, so a broken upstream merge
  * can neither go public nor ship. The test list lives only here.
@@ -23,7 +23,7 @@ const steps = [
       'packages/ui/src/lib/messages/enhancePrompt.test.ts',
     ],
   },
-  { name: 'UI type-check', cmd: 'bun', args: ['run', 'type-check:ui'] },
+  { name: 'workspace type-check', cmd: 'bun', args: ['run', 'type-check'] },
 ];
 
 for (const step of steps) {
