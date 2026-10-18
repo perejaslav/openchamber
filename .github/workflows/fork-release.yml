@@ -82,6 +82,9 @@ jobs:
         run: |
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
+          # ripgrep ships inside the package. Upstream v2.4.0 checks for it
+          # before packaging, and the check fails the job when it is absent.
+          OPENCHAMBER_TARGET_ARCH=x64 bun run prepare:ripgrep
 
       - name: Bundle main process
         working-directory: packages/electron
@@ -168,6 +171,7 @@ jobs:
           printf 'ru %s release build\n' "${{ github.ref_name }}" > resources/web-dist/.openchamber-locale-patch
           bun run prepare:opencode-cli
           bun run verify:opencode-cli
+          bun run prepare:ripgrep
           bun run bundle:main
           bun run rebuild:native
           node ./scripts/package.mjs --linux --x64 --publish=never
