@@ -15,8 +15,8 @@ name: RU upstream sync
 
 on:
   schedule:
-    # Every 6 hours. GitHub may delay scheduled runs under load.
-    - cron: '0 */6 * * *'
+    # Every 12 hours. GitHub may delay scheduled runs under load.
+    - cron: '0 */12 * * *'
   workflow_dispatch:
     inputs:
       upstream_ref:
@@ -384,7 +384,7 @@ jobs:
           gh label create ru-sync --repo "$GITHUB_REPOSITORY" \
             --color B60205 --description "Автосинхронизация русского форка с апстримом" --force >/dev/null 2>&1 || true
 
-          # One issue per version: a scheduled run every 6 hours must not pile up.
+          # One issue per version: a scheduled run every 12 hours must not pile up.
           if gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
                --json title --jq '.[].title' | grep -qxF "$TITLE"; then
             echo "Открытый issue для этой версии уже есть — новый не создаю."
