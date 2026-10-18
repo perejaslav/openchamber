@@ -46,6 +46,8 @@ An identity is one repository's complete answer: signature, provider account (`a
 ### Status and Diff Operations
 - `getStatus(directory, { mode })`: Get comprehensive Git status including current branch, tracking, ahead/behind, file changes, diff stats, merge/rebase state. `mode: 'light'` skips the diff stats. One read runs per directory at a time and at most four run across directories (`serial-refresh.js`): a call made while a read is running waits for one follow-up read that starts after the call, so no caller gets a snapshot older than its request, and every caller that arrives during one read shares that single follow-up at the widest mode any of them asked for. Clients refresh after every completed agent tool call and from several surfaces at once; on a large repository (a status read is a dozen Git processes walking the working tree) this bound is what keeps identical `git status` processes from piling up side by side. A slot is held only while the read is alive: every process the read spawns is killed after two minutes without output (one minute for the untracked-directory listing, thirty seconds for the repository probe), so a Git process that hangs, which happens on Windows, fails that read instead of holding a slot until someone kills it by hand. On Windows the listing is ended with `taskkill /T`, because the spawned `git.exe` is Git for Windows' launcher and killing it alone leaves the real `git` child walking the tree as an orphan. Untracked files are listed with `-unormal` and each new directory is then expanded to its files with a bounded `ls-files` listing (`UNTRACKED_DIRECTORY_EXPANSION_LIMIT`, 1000): up to that many files the result equals `-uall`; beyond it the directory stays one `dir/` entry, because `-uall` would walk a forgotten build or dependency directory in full on every read. A nested repository stays a `dir/` entry as before. A status read never writes the index (#2229): its commands run with `GIT_OPTIONAL_LOCKS=0`, and the working-tree stats come from `git diff-files -M --numstat`, because `git diff` rewrites a stale index even with that variable set. Otherwise each read holds `.git/index.lock` for as long as refreshing the index takes, and a `git commit` the user runs in a terminal at that moment fails with "index.lock: File exists". The cost is that the server never refreshes stale index timestamps itself, so after many files are touched without changes each read compares their contents until a command the user runs refreshes the index.
 - `getTrackingBranch(directory)`: Upstream of the checked-out branch as `remote/branch` (the same value as `status.tracking`, including an upstream whose remote ref is gone), or `null` when HEAD is detached or unborn or no upstream is configured. Reads refs and config only. Callers that need just the tracking name (GitHub PR status polling, PR creation) use this instead of `getStatus`.
+- `getCheckedOutBranch(directory)`: Short name of the checked-out branch, or `''` when HEAD is detached or the directory is not a repository. Other Git failures throw. One ref read; session knowledge calls it on every message a session sends.
+- `getPathsWithoutChanges(directory, paths)`: Named paths with no uncommitted changes or which Git cannot resolve. Each path is checked literally with `status --porcelain --untracked-files=all` in the supplied directory, including staged, unstaged, deleted and untracked files.
 - `isAncestorOfHead(directory, sha)`: Check whether a commit is reachable from the checked-out `HEAD`.
 - `isPatchEquivalentOfHead(directory, sha)`: Check whether a commit has a patch-equivalent commit reachable from `HEAD`, for terminal PR history after a rebase. It runs a short bounded `git cherry` probe. Missing old objects cannot prove an association.
 - `getDiff(directory, { path, staged, contextLines })`: Get diff output for files or entire working tree with full Git blob identities. Untracked symbolic links are represented as link entries without following their targets.
@@ -160,7 +162,15 @@ provider's exact head revision; validation and creation reject a local or
 remote branch that does not resolve to that revision. A new local PR branch is
 created from that immutable revision rather than the mutable remote-tracking ref,
 and creation verifies the attached worktree HEAD before bootstrap, removing the
-worktree and any branch created by that attempt on mismatch. Failed creation removes
+worktree and any branch created by that attempt on mismatch. A local branch of
+the same name that an earlier, since removed worktree left behind is reused and
+moved to the head (`git worktree add -B`) when it is not checked out elsewhere.
+When it only trails the head nothing else happens; when it diverged, because the
+head was force-pushed, its old tip is first kept in `<branch>-backup-<short sha>`
+and the create result names it in `branchBackup`, which the UI shows in a toast.
+A failed attempt puts a moved branch back on its old tip. The head transfer
+fetches with a forced refspec, so a force-pushed head replaces the stale
+remote-tracking ref instead of failing as non-fast-forward. Failed creation removes
 a remote added by that attempt. An existing remote is reused only when its endpoint
 is byte-for-byte equal; a different endpoint returns `CONTRIBUTOR_REMOTE_COLLISION`
 and no `remote set-url` command runs. OpenChamber
@@ -180,10 +190,15 @@ branch worktree.
 
 The agent tool's `session.moveToWorktree` makes a plain branch worktree
 through `createWorktree` for a session that already exists
-(`../openchamber-sessions/worktree-move.js`), then moves the checkout's
-uncommitted changes over with `stashPush`, `stashApply` by commit hash and
-`stashDrop`, and removes the worktree again with `removeWorktree` when a later
-step fails.
+(`../openchamber-sessions/worktree-move.js`): a new branch, or with
+`existingBranch` an `existing`-mode checkout of a local or remote branch. It
+checks every named carry path for uncommitted changes in the session's directory
+before creating anything, rejecting unchanged or unresolvable paths with 400. It
+then moves the uncommitted changes of the files the agent named over with
+`stashPush` (`paths`, resolved against the session directory to absolute literal pathspecs),
+`stashApply` by commit hash and `stashDrop`, and removes the worktree again
+with `removeWorktree` when a later step fails, deleting the local branch only
+when the move made it.
 
 ### Commit and Remote Operations
 - `commit(directory, message, options)`: Create a commit from the current index. An applied identity writes the repository's own `user.name` and `user.email`, and those decide. A repository on the System identity has none on purpose — it says no override applies — so the machine's own author answers, the way Git itself resolves it, and the panel names that author before the commit. With no author anywhere the commit is refused with the two ways to set one. `options.stageFiles` may be provided with `options.files` by older callers to stage only selected unstaged rows before committing, but the shared Git panel now stages/unstages explicitly before commit.
@@ -270,6 +285,8 @@ Each submodule endpoint needs an exact auxiliary grant, including same-host path
 LFS discovery combines effective attributes, bounded object batches, committed `.lfsconfig`, effective `lfs.url` and remote LFS URLs (Git configuration wins over `.lfsconfig`, and `lfs.url` over `remote.<name>.lfsurl`, as in Git LFS), and executable filter and transfer configuration. It queries attributes and object metadata in batches of at most 1,024 paths, then reads only pointer-sized blobs through `cat-file --batch`. A complete ordinary repository is not rejected merely for exceeding 256 or 1,024 files, LFS files included: every pointer-sized blob is validated, but the scan keeps at most 256 attribute records and 256 pointer samples as evidence, so memory does not grow with the number of LFS files. `discoverLfs` therefore returns `attributePaths` and `pointers` as bounded samples; hydration reads only whether LFS is needed. Listing, query-output, and pointer-byte limits remain enforced. A checkout that exceeds one of them, such as a tracked-file listing over 16 MiB, fails hydration with `CHECKOUT_TOO_LARGE` under the `invalid` status, never as a configuration error. Submodule discovery limits keep `INVALID_REQUEST`. Incomplete or malformed discovery fails closed, never as `not-needed`. Custom transfer agents and non-canonical executable LFS filters fail before LFS execution. The effective HTTPS LFS endpoint gets its own exact auxiliary grant, including for an SSH Git checkout. Hydration runs explicit `git lfs fetch <selected-parent-remote> HEAD` and `git lfs checkout` under registry process ownership. A required missing client returns `GIT_LFS_CLIENT_MISSING` with `client-missing` instead of a generic clone failure.
 
 Local worktree hydration first inspects local content. Git-route and OpenChamber-session creation both use the server's one durable bootstrap store and always invoke this inspection, including for repositories without a source-control binding. Both pass the repository authority from the binding read, so an unbound repository resolves its checkout remote and submodule endpoints as System grants against the store's tombstone revision, the same way it pushes and fetches. A checkout needing neither submodule nor LFS transfer requires no parent remote; required hydration without an exact source persists path-specific authorization data rather than choosing `origin` or reporting setup ready. Its operation-private durable marker carries no fabricated repository or remote authority and cannot complete a retained-checkout repair blocker. Managed pull and sync integration use a credential-free local execution context with network protocols, lazy fetching, hooks, content filters, fsmonitor, autostash, and recursive submodule operations disabled. Required post-integration hydration uses explicit grants; failure preserves the completed local update and skips sync publication.
+
+Checkout discovery and publication preparation accept repeated effective Git filter entries only when each value is identical and canonical: `filter.lfs.clean=git-lfs clean -- %f`, `filter.lfs.smudge=git-lfs smudge -- %f`, `filter.lfs.process=git-lfs filter-process`, and `filter.lfs.required=true`. Conflicting values, all other duplicate effective keys, and duplicate committed `.lfsconfig` keys remain invalid.
 
 ### Managed LFS publication
 

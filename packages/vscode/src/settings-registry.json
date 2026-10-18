@@ -162,10 +162,10 @@
     "agentNotifyToolEnabled": {
       "scope": "instance"
     },
-    "agentToolsCodeMode": {
+    "agentRenderToolEnabled": {
       "scope": "instance"
     },
-    "agentWorktreeMoveWithoutAsking": {
+    "agentToolsCodeMode": {
       "scope": "instance"
     },
     "agentMemoryToolEnabled": {

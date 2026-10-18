@@ -3,6 +3,7 @@ import morphdom from 'morphdom';
 import { renderMermaidASCII, renderMermaidSVG } from 'beautiful-mermaid';
 import type { Part } from '@/lib/opencode/model';
 import { cn } from '@/lib/utils';
+import { cancelWhenLayoutSettled, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { useI18n } from '@/lib/i18n';
 import { isAppLinkUrl } from '@/lib/url';
 import { useOptionalThemeSystem } from '@/contexts/useThemeSystem';
@@ -45,8 +46,11 @@ import {
 } from './markdown/decorate';
 import type { RenderedCopyFormat } from './markdown/selectionMarkdown';
 import { attachInlineMarkdownImages } from './markdown/inlineMarkdownImages';
+import { attachMarkdownVideoFallback } from './markdown/markdownVideo';
 import { observeMarkdownTableWidth } from './markdown/tableWidthObserver';
 import { findTextPosition } from './markdown/textPosition';
+import { splitFrontmatter } from './markdown/frontmatter';
+import { FrontmatterProperties } from './markdown/FrontmatterProperties';
 import { createMermaidViewerRegistry, MERMAID_BLOCK_SELECTOR, shouldRefreshMermaidViewers } from './markdown/mermaidViewer';
 import {
   BLOCK_PATH_TOKEN_RE,
@@ -89,6 +93,13 @@ const resolveOwnOrigins = (): string[] => {
   return origins;
 };
 
+const useMarkdownVideoFallback = (containerRef: React.RefObject<HTMLDivElement | null>) => {
+  React.useEffect(() => {
+    const container = containerRef.current;
+    return container ? attachMarkdownVideoFallback(container) : undefined;
+  }, [containerRef]);
+};
+
 const useLinkInteractions = ({
   containerRef,
   enabled,
@@ -125,18 +136,6 @@ const DEFAULT_MERMAID_CONTROLS: MermaidControlOptions = {
   showPanZoomControls: true,
 };
 const DEFAULT_MERMAID_FULLSCREEN_ENABLED = true;
-
-const stripLeadingFrontmatter = (markdown: string): string => {
-  const frontmatterMatch = markdown.match(
-    /^(?:\uFEFF)?(---|\+\+\+)[^\S\r\n]*\r?\n[\s\S]*?\r?\n\1[^\S\r\n]*(?:\r?\n|$)/,
-  );
-
-  if (!frontmatterMatch) {
-    return markdown;
-  }
-
-  return markdown.slice(frontmatterMatch[0].length);
-};
 
 export type MarkdownVariant = 'assistant' | 'tool' | 'reasoning';
 
@@ -1027,17 +1026,26 @@ const useMorphdomMarkdown = ({
     mermaidViewerRef.current.refresh();
   }, [containerRef]);
   const { tableCellWrap } = ctx;
+  const tableCellWrapRef = React.useRef(tableCellWrap);
+  tableCellWrapRef.current = tableCellWrap;
+  const deferredTableLayout = React.useCallback(() => scheduleTableLayoutRef.current(), []);
   const layoutTables = React.useCallback(() => {
     const container = containerRef.current;
     const target = container?.querySelector<HTMLElement>('[data-markdown-content]') ?? container;
     if (!target) return;
     stabilizeMarkdownTableWidths(target, tableCellWrap);
     // Column widths are fixed for the width they were laid out in, so a
-    // resized chat or document lays the tables out again.
+    // resized chat or document lays the tables out again: at once, from the
+    // widths measured before, so the table moves with the text around it.
+    // Only a table that has to be measured waits, to the end of a side
+    // column's animation and the next frame.
     if (!stopTableWidthWatchRef.current && target.querySelector('table[data-markdown="table"]')) {
-      stopTableWidthWatchRef.current = observeMarkdownTableWidth(target, () => scheduleTableLayoutRef.current());
+      stopTableWidthWatchRef.current = observeMarkdownTableWidth(target, () => {
+        if (stabilizeMarkdownTableWidths(target, tableCellWrapRef.current, { cachedOnly: true })) return;
+        runWhenLayoutSettled(deferredTableLayout);
+      });
     }
-  }, [containerRef, tableCellWrap]);
+  }, [containerRef, deferredTableLayout, tableCellWrap]);
   const scheduleTableLayout = React.useCallback(() => {
     if (!tableLayoutSettled) return;
     const previousFrame = tableLayoutFrameRef.current;
@@ -1067,11 +1075,12 @@ const useMorphdomMarkdown = ({
   React.useEffect(() => () => {
     stopTableWidthWatchRef.current?.();
     stopTableWidthWatchRef.current = null;
+    cancelWhenLayoutSettled(deferredTableLayout);
     const frame = tableLayoutFrameRef.current;
     if (frame === null) return;
     window.cancelAnimationFrame(frame);
     tableLayoutFrameRef.current = null;
-  }, []);
+  }, [deferredTableLayout]);
 
   // Syntax colours are CSS variables on the content node, set imperatively so
   // they survive morphdom updates. Set before the content below is inserted:
@@ -1404,6 +1413,7 @@ const MarkdownRendererImpl: React.FC<MarkdownRendererProps> = ({
     enabled: enableFileReferences && !isStreaming,
   });
   useLinkInteractions({ containerRef, directory: effectiveDirectory });
+  useMarkdownVideoFallback(containerRef);
 
   const syntaxVars = React.useMemo(() => getMarkdownSyntaxVars(currentTheme), [currentTheme]);
   // With links opening in the browser panel anyway, the preview button next to
@@ -1498,7 +1508,8 @@ const SimpleMarkdownRendererImpl: React.FC<{
   variant?: MarkdownVariant;
   // App links remain confirmed even where ordinary HTTP link handling is off.
   disableLinkSafety?: boolean;
-  stripFrontmatter?: boolean;
+  /** A leading frontmatter block: `hide` drops it, `properties` shows it above the body. Without it the block renders as Markdown. */
+  frontmatter?: 'hide' | 'properties';
   onShowPopup?: (content: ToolPopupContent) => void;
   mermaidControls?: MermaidControlOptions;
   allowMermaidWheelEvents?: boolean;
@@ -1510,7 +1521,7 @@ const SimpleMarkdownRendererImpl: React.FC<{
   className,
   variant = 'assistant',
   disableLinkSafety,
-  stripFrontmatter = false,
+  frontmatter: frontmatterMode,
   onShowPopup,
   mermaidControls = DEFAULT_MERMAID_CONTROLS,
   allowMermaidWheelEvents = false,
@@ -1522,9 +1533,9 @@ const SimpleMarkdownRendererImpl: React.FC<{
   const containerRef = React.useRef<HTMLDivElement>(null);
   const effectiveDirectory = useEffectiveDirectory() ?? '';
 
-  const renderedContent = React.useMemo(
-    () => (stripFrontmatter ? stripLeadingFrontmatter(content) : content),
-    [content, stripFrontmatter],
+  const { frontmatter, body: renderedContent } = React.useMemo(
+    () => (frontmatterMode ? splitFrontmatter(content) : { frontmatter: null, body: content }),
+    [content, frontmatterMode],
   );
 
   useMermaidInlineInteractions({
@@ -1542,6 +1553,7 @@ const SimpleMarkdownRendererImpl: React.FC<{
     enabled: enableFileReferences,
   });
   useLinkInteractions({ containerRef, enabled: !disableLinkSafety, directory: effectiveDirectory });
+  useMarkdownVideoFallback(containerRef);
 
   const syntaxVars = React.useMemo(() => getMarkdownSyntaxVars(currentTheme), [currentTheme]);
   const ctx = useDecorateContext(currentTheme, undefined, mermaidControls);
@@ -1561,6 +1573,7 @@ const SimpleMarkdownRendererImpl: React.FC<{
 
   return (
     <div className={cn('break-words w-full min-w-0', className)} ref={containerRef}>
+      {frontmatterMode === 'properties' && frontmatter ? <FrontmatterProperties frontmatter={frontmatter} /> : null}
       <div className={markdownContentClassName(variant)} data-markdown-content data-markdown-html={allowRawHtml ? '' : undefined} />
     </div>
   );
@@ -1575,7 +1588,7 @@ export const SimpleMarkdownRenderer = React.memo(SimpleMarkdownRendererImpl, (pr
     && prev.variant === next.variant
     && prev.className === next.className
     && prev.disableLinkSafety === next.disableLinkSafety
-    && prev.stripFrontmatter === next.stripFrontmatter
+    && prev.frontmatter === next.frontmatter
     && prev.onShowPopup === next.onShowPopup
     && prevMermaidControls.download === nextMermaidControls.download
     && prevMermaidControls.copy === nextMermaidControls.copy

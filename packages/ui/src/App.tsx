@@ -1,5 +1,6 @@
 import { OpenCodeCompatibilityGate } from '@/components/update/OpenCodeCompatibilityGate';
 import React from 'react';
+import { startDiagnosticCapture } from '@/lib/diagnostics/capture';
 import { AppStartupOverlay } from '@/components/ui/AppStartupOverlay';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { AppLinkConfirmDialog } from '@/components/chat/AppLinkConfirmDialog';
@@ -22,6 +23,7 @@ import { useWebNotificationStream } from '@/hooks/useWebNotificationStream';
 import { useAgentMemorySync } from '@/hooks/useAgentMemorySync';
 import { useBrowserProviderSync } from '@/hooks/useBrowserProviderSync';
 import { useEnterprisePolicySync } from '@/hooks/useEnterprisePolicySync';
+import { useRelayLimitToast } from '@/hooks/useRelayLimitToast';
 import { useRoutingSync } from '@/hooks/useRoutingSync';
 import { useIntegrationCatalogPrefetch } from '@/hooks/useIntegrationCatalogPrefetch';
 import { usePwaInstallPrompt } from '@/hooks/usePwaInstallPrompt';
@@ -201,6 +203,7 @@ type AppProps = {
 };
 
 function App({ apis }: AppProps) {
+  React.useEffect(() => startDiagnosticCapture(), []);
   React.useEffect(() => {
     markStartupTrace('App:mounted');
     if (startupTraceEnabled()) {
@@ -669,6 +672,8 @@ function App({ apis }: AppProps) {
   useBrowserProviderSync();
   useRoutingSync();
   useEnterprisePolicySync();
+  // Desktop windows on a relay host; the phone has its own handling in MobileApp.
+  useRelayLimitToast();
   useIntegrationCatalogPrefetch(isInitialized && isConnected, runtimeEndpointEpoch);
   usePwaInstallPrompt();
 

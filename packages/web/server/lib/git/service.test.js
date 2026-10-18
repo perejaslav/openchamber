@@ -32,6 +32,11 @@ import {
   getLog,
   getStatus,
   getTrackingBranch,
+  getCheckedOutBranch,
+  getPathsWithoutChanges,
+  stashPush,
+  stashApply,
+  listStashes,
   getWorktrees,
   isGitRepository,
   isPatchEquivalentOfHead,
@@ -2816,6 +2821,71 @@ exec "$REAL_GIT" "$@"
     });
   }, 30_000);
 
+  // A worktree of this change request was removed earlier and left its local branch behind.
+  const commitOnBranch = (repository, branch, file, start = 'next') => {
+    runGit(repository, ['checkout', '-B', branch, start]);
+    fs.writeFileSync(path.join(repository, file), `${file}\n`);
+    runGit(repository, ['add', file]);
+    runGit(repository, ['commit', '-m', file]);
+    const sha = runGit(repository, ['rev-parse', 'HEAD']).trim();
+    runGit(repository, ['checkout', 'next']);
+    return sha;
+  };
+  const transferredSameRepositoryInput = (remote, worktreeName, expectedRevision) => ({
+    mode: 'existing',
+    branchName: 'feature/login',
+    worktreeName,
+    existingBranch: 'remotes/origin/feature/login',
+    ensureRemoteName: 'origin',
+    ensureRemoteUrl: remote,
+    changeRequestTransfer: true,
+    contributorTransferComplete: true,
+    expectedRevision,
+  });
+
+  it('moves a leftover change request branch that trails the head, without a backup', async () => {
+    if (!canRunGit()) return;
+
+    await withDataHome(async () => {
+      const { remote, repository } = createRepositoryWithRemote();
+      const leftover = commitOnBranch(repository, 'feature/login', 'FIRST.md');
+      const head = commitOnBranch(repository, 'head-source', 'SECOND.md', leftover);
+      runGit(repository, ['update-ref', 'refs/remotes/origin/feature/login', head]);
+
+      const created = await createWorktree(repository, transferredSameRepositoryInput(remote, 'pr-7-behind', head));
+
+      expect(created.branch).toBe('feature/login');
+      expect(created.branchBackup).toBeUndefined();
+      expect(runGit(created.path, ['rev-parse', 'HEAD']).trim()).toBe(head);
+      expect(runGit(repository, ['branch', '--list', 'feature/login-backup-*']).trim()).toBe('');
+    });
+  }, 30_000);
+
+  it('keeps a diverged leftover change request branch in a backup before moving it to the head', async () => {
+    if (!canRunGit()) return;
+
+    await withDataHome(async () => {
+      const { remote, repository } = createRepositoryWithRemote();
+      const leftover = commitOnBranch(repository, 'feature/login', 'OLD.md');
+      const head = commitOnBranch(repository, 'rebased', 'REBASED.md');
+      runGit(repository, ['update-ref', 'refs/remotes/origin/feature/login', head]);
+
+      const created = await createWorktree(repository, {
+        ...transferredSameRepositoryInput(remote, 'pr-7-diverged', head),
+        returnAfterDirectoryCreated: true,
+      });
+
+      const backup = `feature/login-backup-${leftover.slice(0, 7)}`;
+      expect(created.branchBackup).toBe(backup);
+      expect(runGit(repository, ['rev-parse', `refs/heads/${backup}`]).trim()).toBe(leftover);
+      await expect.poll(() => getWorktreeBootstrapStatus(created.path).then((status) => status.status), {
+        timeout: 5_000,
+      }).toBe('ready');
+      expect(runGit(created.path, ['rev-parse', 'HEAD']).trim()).toBe(head);
+      expect(runGit(created.path, ['branch', '--show-current']).trim()).toBe('feature/login');
+    });
+  }, 30_000);
+
   it('rejects a fork branch that moved away from the requested PR head revision', async () => {
     if (!canRunGit()) return;
 
@@ -5512,6 +5582,80 @@ describe('getTrackingBranch', () => {
     runGit(repo, ['checkout', '--detach']);
     await expect(getTrackingBranch(repo)).resolves.toBeNull();
     await expect(getTrackingBranch(createTempDir())).resolves.toBeNull();
+  });
+});
+
+describe('getCheckedOutBranch', () => {
+  it('names the checked-out branch, and returns empty when there is none to name', async () => {
+    if (!canRunGit()) return;
+
+    const repo = createTempDir();
+    runGit(repo, ['init', '-b', 'main']);
+    await expect(getCheckedOutBranch(repo)).resolves.toBe('main');
+    runGit(repo, ['config', 'user.email', 'test@example.com']);
+    runGit(repo, ['config', 'user.name', 'Test User']);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'Initial commit']);
+    await expect(getCheckedOutBranch(repo)).resolves.toBe('main');
+
+    runGit(repo, ['checkout', '-b', 'fix/other-session']);
+    await expect(getCheckedOutBranch(repo)).resolves.toBe('fix/other-session');
+
+    runGit(repo, ['checkout', '--detach']);
+    await expect(getCheckedOutBranch(repo)).resolves.toBe('');
+    await expect(getCheckedOutBranch(createTempDir())).resolves.toBe('');
+  });
+
+  it('throws for a real git failure', async () => {
+    if (!canRunGit()) return;
+    const repo = createTempDir();
+    runGit(repo, ['init', '-b', 'main']);
+    fs.writeFileSync(path.join(repo, '.git', 'config'), '[broken config\n');
+    await expect(getCheckedOutBranch(repo)).rejects.toThrow(/bad config/i);
+  });
+});
+
+describe('carry path validation and stashing', () => {
+  it('checks literal paths from the session directory and stashes absolute paths from the root', async () => {
+    if (!canRunGit()) return;
+    const repo = createTempDir();
+    runGit(repo, ['init', '-b', 'main']);
+    runGit(repo, ['config', 'user.email', 'test@example.com']);
+    runGit(repo, ['config', 'user.name', 'Test User']);
+    const nested = path.join(repo, 'nested');
+    fs.mkdirSync(nested);
+    for (const name of ['unstaged.ts', 'staged.ts', 'deleted.ts', 'clean.ts']) {
+      fs.writeFileSync(path.join(nested, name), 'original\n');
+    }
+    runGit(repo, ['add', '.']);
+    runGit(repo, ['commit', '-m', 'Add carry fixtures']);
+    fs.writeFileSync(path.join(nested, 'unstaged.ts'), 'modified\n');
+    fs.writeFileSync(path.join(nested, 'staged.ts'), 'staged\n');
+    runGit(repo, ['add', 'nested/staged.ts']);
+    fs.unlinkSync(path.join(nested, 'deleted.ts'));
+    fs.mkdirSync(path.join(nested, 'new'));
+    fs.writeFileSync(path.join(nested, 'new', 'untracked.ts'), 'new\n');
+    fs.writeFileSync(path.join(nested, '[literal].ts'), 'literal\n');
+    fs.writeFileSync(path.join(repo, 'unrelated.ts'), 'keep here\n');
+
+    const changed = ['unstaged.ts', 'staged.ts', 'deleted.ts', 'new/untracked.ts', '[literal].ts'];
+    const invalid = ['clean.ts', 'missing.ts', '*.ts', path.join(createTempDir(), 'outside.ts')];
+    await expect(getPathsWithoutChanges(nested, [...changed, ...invalid])).resolves.toEqual(invalid);
+    await expect(getPathsWithoutChanges(nested, [path.join(nested, 'unstaged.ts')])).resolves.toEqual([]);
+
+    await stashPush(nested, { message: 'carry test', paths: changed.map((name) => path.resolve(nested, name)) });
+    expect(fs.readFileSync(path.join(nested, 'unstaged.ts'), 'utf8')).toBe('original\n');
+    expect(fs.existsSync(path.join(nested, 'new', 'untracked.ts'))).toBe(false);
+    expect(fs.readFileSync(path.join(repo, 'unrelated.ts'), 'utf8')).toBe('keep here\n');
+    const [stash] = await listStashes(repo);
+    await stashApply(repo, { ref: stash.hash });
+    expect(fs.readFileSync(path.join(nested, 'unstaged.ts'), 'utf8')).toBe('modified\n');
+    expect(fs.readFileSync(path.join(nested, 'new', 'untracked.ts'), 'utf8')).toBe('new\n');
+    expect(runGit(repo, ['diff', '--cached', '--name-only']).trim()).toBe('nested/staged.ts');
+  });
+
+  it('reports paths git cannot resolve', async () => {
+    if (!canRunGit()) return;
+    await expect(getPathsWithoutChanges(createTempDir(), ['a.ts', 'b.ts'])).resolves.toEqual(['a.ts', 'b.ts']);
   });
 });
 

@@ -9,15 +9,19 @@ import { routingI18n } from './routing.i18n';
 import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
+import { fileContentSearchI18n } from './file-content-search.i18n';
+import { htmlRenderI18n } from './html-render.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode входит в состав OpenChamber. Обновите OpenChamber, чтобы получить OpenCode v2.",
@@ -507,15 +511,19 @@ export const dict: Record<I18nKey, string> = {
   ...pluginPanelI18n.ru,
   ...surfacePanelI18n.ru,
   ...fileArtifactsI18n.ru,
+  ...fileContentSearchI18n.ru,
+  ...htmlRenderI18n.ru,
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
   ...projectActionsI18n.ru,
+  ...gitIdentityEditorI18n.ru,
   ...environmentI18n.ru,
   ...providersI18n.ru,
   ...mcpGridI18n.ru,
   ...pluginsGridI18n.ru,
+  ...integrationsCatalogI18n.ru,
   'terminalView.actions.attachSelection': 'Прикрепить выделенный вывод',
   'terminalView.actions.copySelection': 'Копировать выделенный вывод',
   'terminalView.toast.selectionCopied': 'Вывод скопирован',

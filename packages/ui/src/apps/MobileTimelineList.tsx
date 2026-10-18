@@ -25,6 +25,7 @@ import { formatRelativeShort, getSessionTimestamp } from './mobileSessionFields'
 import { MobileRunProviderLogos } from './MobileRunProviderLogos';
 import { MobileSessionGoalGlyph, MobileSessionPendingBadges } from './MobileSessionStateBadges';
 import { usePendingRequests } from './usePendingRequests';
+import { mobileSessionTitleClass } from './mobileSessionTitle';
 
 export type TimelineProject = MobileProjectIconProject & { label: string };
 
@@ -145,12 +146,13 @@ const MobileTimelineRow: React.FC<{
   entry: Extract<TimelineEntry, { kind: 'session' }>;
   showProject: boolean;
   compact: boolean;
+  pinMarker: boolean;
   active: boolean;
   revealed: boolean;
   confirmingDelete: boolean;
   renaming: boolean;
   handlers: TimelineRowHandlers;
-}> = ({ entry, showProject, compact, active, revealed, confirmingDelete, renaming, handlers }) => {
+}> = ({ entry, showProject, compact, pinMarker, active, revealed, confirmingDelete, renaming, handlers }) => {
   const { t } = useI18n();
   const { session, project, branch, inSpace } = entry;
   const title = session.title?.trim() || t('mobile.sessions.untitled');
@@ -211,7 +213,7 @@ const MobileTimelineRow: React.FC<{
                 <MobileSessionPendingBadges {...pendingRequests} />
               </>
             ) : null}
-            {pinned ? (
+            {pinned && pinMarker ? (
               <Icon name="pushpin" className="size-3 shrink-0 text-muted-foreground" aria-label={t('sessions.sidebar.session.status.pinned')} />
             ) : null}
             {aiRename.pending ? (
@@ -244,7 +246,7 @@ const MobileTimelineRow: React.FC<{
               />
             ) : (
               <span className="flex min-w-0 items-center gap-2">
-                <span dir="auto" className={cn('block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label', active ? 'text-primary' : 'text-foreground')}>
+                <span dir="auto" className={cn('block min-w-0 flex-1 truncate oc-ui-start-align typography-ui-label', mobileSessionTitleClass({ active, unread: showUnreadDot, running: isStreaming, pending: pendingRequests }))}>
                   {title}
                 </span>
                 {status}
@@ -298,13 +300,15 @@ const MobileTimelineRow: React.FC<{
 /** Two-line timeline rows. Under a project header they need no project mark;
     Pinned and In work mix projects, so there each row shows its project's
     icon. `compact` puts a row on one line, the Tree view's default for Pinned
-    and In work. */
+    and In work. The Pinned section passes `pinMarker={false}`: its header
+    already says every row there is pinned. */
 export const MobileTimelineRows: React.FC<{
   entries: readonly TimelineEntry[];
   showProject: boolean;
   compact?: boolean;
+  pinMarker?: boolean;
   handlers: TimelineRowHandlers;
-}> = ({ entries, showProject, compact = false, handlers }) => (
+}> = ({ entries, showProject, compact = false, pinMarker = true, handlers }) => (
   <>
     {entries.map((entry) => (entry.kind === 'run' ? (
       <MobileTimelineRunRow key={`run:${entry.run.key}`} entry={entry} showProject={showProject} compact={compact} />
@@ -314,6 +318,7 @@ export const MobileTimelineRows: React.FC<{
         entry={entry}
         showProject={showProject}
         compact={compact}
+        pinMarker={pinMarker}
         active={handlers.currentSessionId === entry.session.id}
         revealed={handlers.revealedSessionId === entry.session.id}
         confirmingDelete={handlers.confirmingDeleteSessionId === entry.session.id}
