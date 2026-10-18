@@ -226,5 +226,18 @@ export const gitIdentityEditorI18n = {
     'settings.gitIdentities.editor.field.sshKey': 'מפתח SSH',
   },
   ru: {
+    'settings.gitIdentities.editor.appearance.aria': 'Icon and color (не переведено)',
+    'settings.gitIdentities.editor.color.green': 'Green (не переведено)',
+    'settings.gitIdentities.editor.color.red': 'Red (не переведено)',
+    'settings.gitIdentities.editor.color.cyan': 'Cyan (не переведено)',
+    'settings.gitIdentities.editor.color.orange': 'Orange (не переведено)',
+    'settings.gitIdentities.editor.color.yellow': 'Yellow (не переведено)',
+    'settings.gitIdentities.editor.icon.branch': 'Branch (не переведено)',
+    'settings.gitIdentities.editor.icon.work': 'Work (не переведено)',
+    'settings.gitIdentities.editor.icon.personal': 'Personal (не переведено)',
+    'settings.gitIdentities.editor.icon.school': 'School (не переведено)',
+    'settings.gitIdentities.editor.icon.code': 'Code (не переведено)',
+    'settings.gitIdentities.editor.auth.sshHint': 'Pushes and pulls over SSH with a key OpenChamber keeps for this identity. (не переведено)',
+    'settings.gitIdentities.editor.field.sshKey': 'SSH key (не переведено)',
   },
 } as const;

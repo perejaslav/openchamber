@@ -196,5 +196,16 @@ export const fileContentSearchI18n = {
     'sidebarFilesTree.contentSearch.failed': 'החיפוש נכשל: {message}',
   },
   ru: {
+    'sidebarFilesTree.search.mode.aria': 'Search mode (не переведено)',
+    'sidebarFilesTree.search.mode.names': 'File names (не переведено)',
+    'sidebarFilesTree.search.mode.contents': 'File contents (не переведено)',
+    'sidebarFilesTree.search.contentsPlaceholder': 'Search in files... (не переведено)',
+    'sidebarFilesTree.search.regexTitle': 'Use regular expression (не переведено)',
+    'sidebarFilesTree.contentSearch.empty': 'No matches. (не переведено)',
+    'sidebarFilesTree.contentSearch.limit': 'Showing the first {count} matches. (не переведено)',
+    'sidebarFilesTree.contentSearch.deadline': 'The search stopped after 30 seconds, so the list may be incomplete. (не переведено)',
+    'sidebarFilesTree.contentSearch.unavailable': 'This server cannot search file contents: it has no ripgrep. (не переведено)',
+    'sidebarFilesTree.contentSearch.invalidPattern': 'This regular expression is not valid. (не переведено)',
+    'sidebarFilesTree.contentSearch.failed': 'The search failed: {message} (не переведено)',
   },
 } as const;

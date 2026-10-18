@@ -1246,6 +1246,12 @@ export const sourceBoardI18n = {
     'sourceBoard.list.toggleAria': 'רשימת פריטים, מוצג {item}',
   },
   ru: {
+    'sourceBoard.reply.startThread': 'Start thread (не переведено)',
+    'sourceBoard.reply.startThreadHint': 'Post as a thread that someone has to resolve (не переведено)',
+    'sourceBoard.reply.toast.threadStarted': 'Started a thread on {reference} (не переведено)',
+    'sourceBoard.thread.toast.replyFailed': 'Could not reply on {reference} (не переведено)',
+    'sourceBoard.thread.toast.resolveFailed': 'Could not resolve the thread on {reference} (не переведено)',
+    'sourceBoard.thread.toast.unresolveFailed': 'Could not unresolve the thread on {reference} (не переведено)',
     'sourceBoard.title': 'Issues and PRs (не переведено)',
     'sourceBoard.project.label': 'Project (не переведено)',
     'sourceBoard.team.label': 'Linear team (не переведено)',

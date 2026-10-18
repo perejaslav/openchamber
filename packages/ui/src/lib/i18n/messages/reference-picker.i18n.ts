@@ -1891,6 +1891,15 @@ export const referencePickerI18n = {
     'references.picker.preview.refresh': 'רענון',
   },
   ru: {
+    'references.picker.thread.resolved': 'Resolved (не переведено)',
+    'references.picker.thread.resolvedOneReply': 'Resolved · 1 reply (не переведено)',
+    'references.picker.thread.resolvedReplies': 'Resolved · {count} replies (не переведено)',
+    'references.picker.thread.reply': 'Reply (не переведено)',
+    'references.picker.thread.replyPlaceholder': 'Write a reply (не переведено)',
+    'references.picker.thread.cancel': 'Cancel (не переведено)',
+    'references.picker.thread.resolve': 'Resolve (не переведено)',
+    'references.picker.thread.unresolve': 'Unresolve (не переведено)',
+    'references.picker.thread.collapse': 'Collapse (не переведено)',
     'references.picker.title.gitlab.attach': 'Link from GitLab (не переведено)',
     'references.picker.title.gitlab.worktree': 'Start from GitLab (не переведено)',
     'references.picker.tab.mergeRequests': 'Merge requests (не переведено)',
@@ -2005,5 +2014,6 @@ export const referencePickerI18n = {
     'references.picker.preview.worktree.pull': 'The worktree checks out this pull request’s branch. (не переведено)',
     'references.picker.preview.reviewers': 'Reviewers (не переведено)',
     'references.picker.preview.stateMenuAria': 'Change state ({state}) (не переведено)',
+    'references.picker.preview.refresh': 'Refresh (не переведено)',
   },
 } as const;

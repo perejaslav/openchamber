@@ -211,5 +211,17 @@ export const htmlRenderI18n = {
     'settings.openchamber.tools.field.agentRenderToolInfo': 'הדפים רצים בסביבה מבודדת ללא גישה לסשנים או לקבצים שלך. קישורים נפתחים בדפדפן.',
   },
   ru: {
+    'chat.htmlRender.fullscreen': 'Open full screen (не переведено)',
+    'chat.htmlRender.download': 'Download as HTML (не переведено)',
+    'chat.htmlRender.downloadFailed': 'Could not save the page. (не переведено)',
+    'chat.htmlRender.waiting': 'Waiting for your answer on the page (не переведено)',
+    'chat.htmlRender.answered': 'Answered: {summary} (не переведено)',
+    'chat.htmlRender.answeredInChat': 'Answered in the chat (не переведено)',
+    'chat.htmlRender.unanswered': 'Not answered (не переведено)',
+    'chat.htmlRender.answerFailed': 'Could not send the answer (не переведено)',
+    'settings.openchamber.tools.field.agentRenderTool': 'Agent render tool (не переведено)',
+    'settings.openchamber.tools.field.agentRenderToolAria': 'Agent render tool (не переведено)',
+    'settings.openchamber.tools.field.agentRenderToolSummary': 'Let agents show charts, tables, diagrams and interface mockups right in the chat, and ask you to pick an option there. (не переведено)',
+    'settings.openchamber.tools.field.agentRenderToolInfo': 'Pages run in a sandbox with no access to your sessions or files. Links open in your browser. (не переведено)',
   },
 } as const;

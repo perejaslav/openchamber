@@ -504,5 +504,12 @@ export const projectKnowledgeI18n = {
     'rightSidebar.contextNotesTodo.toast.createPlanFailed': 'Failed to create plan (не переведено)',
     'rightSidebar.contextNotesTodo.memory.unseenTitle': 'New or changed since you last looked: {count} (не переведено)',
     'rightSidebar.contextNotesTodo.search.placeholderInProject': 'Search {project} (не переведено)',
+    'rightSidebar.contextNotesTodo.memory.tidy.action': 'Tidy up (не переведено)',
+    'rightSidebar.contextNotesTodo.memory.tidy.sessionTitle': 'Memory tidy-up (не переведено)',
+    'rightSidebar.contextNotesTodo.memory.tidy.noModel': 'No model to run the tidy-up on. Choose a default model in Settings. (не переведено)',
+    'rightSidebar.contextNotesTodo.memory.tidy.failed': 'Could not start the memory tidy-up. (не переведено)',
+    'rightSidebar.contextNotesTodo.plans.progress.done': 'Done (не переведено)',
+    'rightSidebar.contextNotesTodo.plans.progress.title': '{done} of {total} steps done (не переведено)',
+    'rightSidebar.contextNotesTodo.plans.session.open': 'Open the session working on this plan (не переведено)',
   },
 } as const;
