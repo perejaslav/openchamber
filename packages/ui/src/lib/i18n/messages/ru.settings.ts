@@ -1,3 +1,4 @@
+import { settingsLayoutI18n } from './settings-layout.i18n';
 import { extensionsSettingsI18n } from './extensions.settings.i18n';
 import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { linearIntegrationI18n } from './linear-integration.i18n';
@@ -2545,6 +2546,7 @@ export const settingsDict = {
   ...extensionCatalogI18n.ru,
   ...guestIntegrationsI18n.ru,
   ...extensionsSettingsI18n.ru,
+  ...settingsLayoutI18n.ru,
   'settings.page.integrations.title': 'Интеграции',
   'settings.page.integrations.description': 'Подключите сервисы и подписки, с которыми работает OpenChamber.',
   'settings.agents.page.field.steps': 'Максимум шагов',

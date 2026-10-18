@@ -297,6 +297,76 @@ const ensureRuModuleWiring = (file) => {
 };
 
 /** `en.ts`, `pt-BR.ts`, `zh-CN.ts` … — upstream's per-locale dictionaries. */
+/**
+ * `ru.settings.ts` - второй плоский словарь, и в `en.settings.ts` новые модули
+ * подключаются так же. Ничто не учило `ru.settings.ts` их импортировать и
+ * разворачивать, поэтому модуль, который апстрим перенёс в настройки, молча
+ * терял все свои ключи в русском - `messages.test.ts` падает на паритете
+ * ключей, а конфликта в списке нет.
+ */
+const ensureRuSettingsModuleWiring = (file) => {
+  const enFile = path.join(MESSAGES, 'en.settings.ts');
+  if (!fs.existsSync(file) || !fs.existsSync(enFile)) return false;
+
+  const enModules = [];
+  for (const line of readLines(enFile)) {
+    const match = line.match(MODULE_IMPORT_RE);
+    if (match) enModules.push({ binding: match[1], importLine: line });
+  }
+  if (!enModules.length) return false;
+
+  const lines = readLines(file);
+  let changed = false;
+
+  let importAnchor = -1;
+  lines.forEach((line, index) => {
+    if (/^import .* from '\.\//.test(line)) importAnchor = index;
+  });
+  for (const entry of enModules) {
+    if (lines.some((line) => line.trim() === entry.importLine.trim())) continue;
+    lines.splice(importAnchor + 1, 0, entry.importLine);
+    importAnchor += 1;
+    changed = true;
+  }
+
+  const importIndexes = [];
+  lines.forEach((line, index) => {
+    if (MODULE_IMPORT_RE.test(line)) importIndexes.push(index);
+  });
+  if (importIndexes.length === enModules.length) {
+    enModules.forEach((entry, position) => {
+      const index = importIndexes[position];
+      if (lines[index] !== entry.importLine) {
+        lines[index] = entry.importLine;
+        changed = true;
+      }
+    });
+  }
+
+  const bindings = new Set(enModules.map((entry) => entry.binding));
+  const isModuleSpread = (line) => {
+    const match = line.match(/^\s*\.\.\.(\w+)\.ru,$/);
+    return match !== null && bindings.has(match[1]);
+  };
+  let spreadCursor = -1;
+  lines.forEach((line, index) => {
+    if (isModuleSpread(line)) spreadCursor = index;
+  });
+  if (spreadCursor < 0) {
+    spreadCursor = lines.findIndex((line) => /^export const settingsDict = \{$/.test(line));
+  }
+  for (const entry of enModules) {
+    if (lines.some((line) => line.trim() === `...${entry.binding}.ru,`)) continue;
+    if (spreadCursor < 0) continue;
+    lines.splice(spreadCursor + 1, 0, `  ...${entry.binding}.ru,`);
+    spreadCursor += 1;
+    changed = true;
+  }
+
+  if (changed) writeLines(file, lines);
+  return changed;
+};
+
 const LOCALE_DICTIONARY_RE = /^[a-z]{2}(?:-[A-Za-z]{2})?\.ts$/;
 
 const isLocaleDictionary = (file) => {
@@ -426,6 +496,15 @@ const main = () => {
       if (ensureRuModuleWiring(ruFile)) resolved.push(ruFile);
     } catch (error) {
       leftAlone.push(`${ruFile} (${error instanceof Error ? error.message : error})`);
+    }
+  }
+
+  const ruSettingsFile = path.join(MESSAGES, 'ru.settings.ts');
+  if (!keptConflicted.has(toGitPath(ruSettingsFile))) {
+    try {
+      if (ensureRuSettingsModuleWiring(ruSettingsFile)) resolved.push(ruSettingsFile);
+    } catch (error) {
+      leftAlone.push(`${ruSettingsFile} (${error instanceof Error ? error.message : error})`);
     }
   }
 
