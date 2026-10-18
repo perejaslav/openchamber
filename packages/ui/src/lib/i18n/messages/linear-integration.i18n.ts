@@ -709,7 +709,7 @@ export const linearIntegrationI18n = {
     'settings.integrations.linear.label.otherWorkspaces': 'Другие рабочие области',
     'settings.integrations.linear.flow.title': 'Ожидание Linear',
     'settings.integrations.linear.flow.description': 'Завершите вход во вкладке браузера, которая только что открылась.',
-    'settings.integrations.linear.flow.waiting': 'Ожидание авторизации…',
+    'settings.integrations.linear.flow.waiting': 'Ожидание авторизации',
     'settings.integrations.linear.toast.connected': 'Linear подключён',
     'settings.integrations.linear.toast.disconnected': 'Linear отключён',
     'settings.integrations.linear.toast.workspaceSwitched': 'Рабочая область Linear переключена',
