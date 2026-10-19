@@ -1969,7 +1969,7 @@ const openFolderContextMenu = createOpenFolderContextMenu({
   emit: emitToPrimaryWindow,
 });
 openFolderContextMenu.register();
-openFolderContextMenu.handleArgv(process.argv);
+openFolderContextMenu.handleLaunch(process.argv);
 
 const setTaskbarProgress = (value) => {
   if (process.platform !== 'win32') return;

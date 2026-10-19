@@ -65,7 +65,7 @@ describe('fork guards: Open in OpenChamber (Explorer context menu)', () => {
         expect(source).toContain("from './fork/open-folder-context-menu.mjs'");
         expect(source).toContain('createOpenFolderContextMenu({');
         expect(source).toContain('openFolderContextMenu.register();');
-        expect(source).toContain('openFolderContextMenu.handleArgv(process.argv);');
+        expect(source).toContain('openFolderContextMenu.handleLaunch(process.argv);');
         expect(source).toContain('openFolderContextMenu.handleArgv(argv);');
     });
 
@@ -95,7 +95,7 @@ describe('fork guards: Open in OpenChamber (Explorer context menu)', () => {
             const restored = fs.readFileSync(file, 'utf8');
             expect(restored).toContain("from './fork/open-folder-context-menu.mjs'");
             expect(restored).toContain('openFolderContextMenu.register();');
-            expect(restored).toContain('openFolderContextMenu.handleArgv(process.argv);');
+            expect(restored).toContain('openFolderContextMenu.handleLaunch(process.argv);');
             expect(restored).toContain('openFolderContextMenu.handleArgv(argv);');
             // Applying it twice must not double the hooks.
             expect(ensureOpenFolderHooks(file)).toBe(false);

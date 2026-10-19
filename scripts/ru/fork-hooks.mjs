@@ -49,7 +49,7 @@ export const OPEN_FOLDER_HOOK_RULES = [
       '  emit: emitToPrimaryWindow,',
       '});',
       'openFolderContextMenu.register();',
-      'openFolderContextMenu.handleArgv(process.argv);',
+      'openFolderContextMenu.handleLaunch(process.argv);',
       '',
       'const setTaskbarProgress = (value) => {',
     ].join('\n'),
