@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OPEN_FOLDER_HOOK_RULES, ensureOpenFolderHooks } from '../../../../scripts/ru/fork-hooks.mjs';
 
 /**
  * Canary for the fork's own edits. An upstream merge can drop them without a
@@ -48,5 +51,66 @@ describe('fork guards: model picker height', () => {
 
     test('ModelPickerList keeps the 640px popup', () => {
         expect(read('../components/model-picker/ModelPickerList.tsx')).toContain('min(640px,');
+    });
+});
+
+describe('fork guards: Open in OpenChamber (Explorer context menu)', () => {
+    test('the feature lives in a fork-owned file upstream never touches', () => {
+        expect(exists('../../../electron/fork/open-folder-context-menu.mjs')).toBe(true);
+        expect(exists('../../../electron/fork/open-folder-context-menu.test.mjs')).toBe(true);
+    });
+
+    test('main.mjs wires the feature in', () => {
+        const source = read('../../../electron/main.mjs');
+        expect(source).toContain("from './fork/open-folder-context-menu.mjs'");
+        expect(source).toContain('createOpenFolderContextMenu({');
+        expect(source).toContain('openFolderContextMenu.register();');
+        expect(source).toContain('openFolderContextMenu.handleArgv(process.argv);');
+        expect(source).toContain('openFolderContextMenu.handleArgv(argv);');
+    });
+
+    test('the merge resolver knows how to re-apply the hooks', () => {
+        const source = read('../../../../scripts/ru/resolve-merge-conflicts.mjs');
+        expect(source).toContain('ensureOpenFolderHooks');
+        expect(source).toContain('OPEN_FOLDER_HOOK_FILE');
+    });
+
+    test('the hooks come back on top of an upstream file', () => {
+        // What the resolver does after taking upstream's side of a conflicted
+        // main.mjs: strip the fork's edits, re-apply them, and the feature is
+        // whole again. This is what keeps the feature alive across an
+        // upstream merge without anyone touching it by hand.
+        const upstream = read('../../../electron/main.mjs');
+        const stripped = OPEN_FOLDER_HOOK_RULES.reduce(
+            (source, rule) => source.replace(rule.to, rule.from),
+            upstream,
+        );
+        expect(stripped).not.toContain('openFolderContextMenu');
+        expect(stripped).not.toContain("from './fork/open-folder-context-menu.mjs'");
+
+        const file = path.join(os.tmpdir(), `openchamber-main-${process.pid}.mjs`);
+        fs.writeFileSync(file, stripped, 'utf8');
+        try {
+            expect(ensureOpenFolderHooks(file)).toBe(true);
+            const restored = fs.readFileSync(file, 'utf8');
+            expect(restored).toContain("from './fork/open-folder-context-menu.mjs'");
+            expect(restored).toContain('openFolderContextMenu.register();');
+            expect(restored).toContain('openFolderContextMenu.handleArgv(process.argv);');
+            expect(restored).toContain('openFolderContextMenu.handleArgv(argv);');
+            // Applying it twice must not double the hooks.
+            expect(ensureOpenFolderHooks(file)).toBe(false);
+        } finally {
+            fs.rmSync(file, { force: true });
+        }
+    });
+
+    test('a changed upstream file fails loudly instead of losing the feature', () => {
+        const file = path.join(os.tmpdir(), `openchamber-main-broken-${process.pid}.mjs`);
+        fs.writeFileSync(file, 'const nothing = 1;\n', 'utf8');
+        try {
+            expect(() => ensureOpenFolderHooks(file)).toThrow();
+        } finally {
+            fs.rmSync(file, { force: true });
+        }
     });
 });

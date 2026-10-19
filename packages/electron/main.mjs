@@ -111,6 +111,10 @@ import { createRelayDevTunnelBridge } from './relay-dev-tunnel.mjs';
 import { parsePairingDeepLink } from './pairing-deep-link.mjs';
 import { attachRendererRecovery } from './renderer-recovery.mjs';
 import { createLoadFailureWarningFilter } from './load-failure-warnings.mjs';
+// RU fork: "Open in OpenChamber" in the Windows Explorer context menu. The
+// feature lives in a fork-owned file; this import and the three calls below
+// are the only places upstream code is touched.
+import { createOpenFolderContextMenu } from './fork/open-folder-context-menu.mjs';
 import { mintOutsideFileGrant } from '@openchamber/web/server/lib/fs/routes.js';
 import { fetchUpdateNotes } from '@openchamber/web/server/lib/changelog/update-notes.js';
 import { applyConnectAttemptTimeout } from '@openchamber/web/server/lib/network-defaults.js';
@@ -1951,6 +1955,21 @@ const emitToPrimaryWindow = (event, detail) => {
     : windows.find((window) => window.isFocused()) || windows.find((window) => window.isVisible()) || windows[0];
   emitToWindow(target, event, detail);
 };
+
+// RU fork: "Open in OpenChamber" in the Windows Explorer context menu. The app
+// registers the entry itself, so every fork build ships it and an app update
+// never drops it. The folder of this launch (or of a second instance) is
+// picked up from the arguments.
+const openFolderContextMenu = createOpenFolderContextMenu({
+  app,
+  log,
+  getMainWindow: () => state.mainWindow,
+  getSidecarUrl: () => state.sidecarUrl,
+  getClientToken: () => readDesktopLocalClientToken(),
+  emit: emitToPrimaryWindow,
+});
+openFolderContextMenu.register();
+openFolderContextMenu.handleArgv(process.argv);
 
 const setTaskbarProgress = (value) => {
   if (process.platform !== 'win32') return;
@@ -6216,6 +6235,9 @@ const handleSecondInstance = (argv) => {
     ? argv.filter((arg) => typeof arg === 'string' && arg.startsWith(`${DEEP_LINK_PROTOCOL}://`))
     : [];
   if (urls.length > 0) handleDeepLinks(urls);
+  // RU fork: a folder picked in the Explorer context menu arrives as an
+  // argument, not as a deep link.
+  openFolderContextMenu.handleArgv(argv);
   if (BrowserWindow.getAllWindows().length > 0) {
     focusForegroundWindow();
   } else {

@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FORK_ONLY_KEY_RE } from './fork-keys.mjs';
+import { OPEN_FOLDER_HOOK_FILE, ensureOpenFolderHooks } from './fork-hooks.mjs';
 
 const I18N_DIR = 'packages/ui/src/lib/i18n';
 const MESSAGES = `${I18N_DIR}/messages`;
@@ -457,6 +458,10 @@ const main = () => {
       } else if (isModelPickerHeightFile(file)) {
         takeTheirs(file);
         ensureModelPickerHeight(file);
+        resolved.push(file);
+      } else if (toGitPath(file) === OPEN_FOLDER_HOOK_FILE) {
+        takeTheirs(file);
+        ensureOpenFolderHooks(file);
         resolved.push(file);
       } else {
         leftAlone.push(file);
