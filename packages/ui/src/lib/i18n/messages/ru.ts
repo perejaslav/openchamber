@@ -11,8 +11,10 @@ import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { fileContentSearchI18n } from './file-content-search.i18n';
 import { htmlRenderI18n } from './html-render.i18n';
+import { sessionNoticesI18n } from './session-notices.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
+import { sessionWarmingI18n } from './session-warming.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
@@ -22,6 +24,7 @@ import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
+import { diffFindI18n } from './diff-find.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode входит в состав OpenChamber. Обновите OpenChamber, чтобы получить OpenCode v2.",
@@ -521,6 +524,33 @@ export const dict: Record<I18nKey, string> = {
   'relayConnection.limitReached.title': "Ретранслятор отклонил подключение",
   'relayConnection.limitReached.description': "Слишком много устройств или переподключений для этого экземпляра. Закройте OpenChamber на другом устройстве или подождите минуту и попробуйте снова.",
   'relayConnection.limitReached.retry': "Повторить",
+  'terminalView.toast.pasteFailedTouch': 'Не удалось прочитать буфер обмена.',
+  'sessions.sidebar.header.listGrouping.label': 'Сессии',
+  'sessions.sidebar.header.listGrouping.project': 'По проекту',
+  'sessions.sidebar.header.listGrouping.time': 'По времени',
+  'sessions.sidebar.activity.projectsTitle': 'Проекты',
+  'walkthrough.toc.jumpAria': 'Перейти к шагу',
+  'walkthrough.options.title': 'Параметры обзорного тура',
+  'walkthrough.options.moreAria': 'Ещё параметры обзорного тура',
+  'walkthrough.options.model': 'Модель',
+  'walkthrough.options.language': 'Язык',
+  'filesView.editor.htmlAnnotate.intro': 'Это выделенный фрагмент с пометками из просмотра HTML-файла.',
+  'diffView.layout.sideBySide': 'Вид «рядом»',
+  'diffView.actions.wrapLines': 'Переносить строки',
+  'diffView.actions.moreActions': 'Ещё действия',
+  'session.newWorktree.toast.startFolderMissing': 'В этом worktree нет папки «{folder}», поэтому OpenCode запустился в корне worktree.',
+  'session.newWorktree.toast.startFolderUnverified': 'Не удалось проверить папку «{folder}», поэтому OpenCode запустился в корне worktree.',
+  'session.newWorktree.toast.startFolderUnknown': 'Не удалось определить, какую папку репозитория открывает этот проект, поэтому OpenCode запустился в корне worktree.',
+  'chat.queuedMessage.goal': 'При отправке запускает цель',
+  'chat.chatInput.toast.imagesSaving': 'Сохраняем {files}…',
+  'chat.chatInput.toast.imagesSavedForTextModel': '{model} не умеет читать изображения. Сохранили {files} в {folder}.',
+  'chat.chatInput.toast.imageSaveFailed': 'Не удалось сохранить {files}. Прикрепили к сообщению.',
+  'chat.chatInput.toast.imagesSaved': 'Сохранили {files} в {folder}.',
+  'chat.chatInput.toast.imageCopySaveFailed': 'Не удалось сохранить {files}.',
+  'chat.modelControls.inheritedVariantTooltip': "Рассуждения: {variant}, значение по умолчанию для этой модели",
+  'quota.window.keyLimit': 'Лимит ключа',
+  'desktopSafeStart.title': 'OpenChamber продолжал падать',
+  'desktopSafeStart.description': 'Панели закрыты, папки свёрнуты.',
   ...settingsDict,
   ...linearIssuePickerI18n.ru,
   ...referencePickerI18n.ru,
@@ -533,8 +563,10 @@ export const dict: Record<I18nKey, string> = {
   ...fileArtifactsI18n.ru,
   ...fileContentSearchI18n.ru,
   ...htmlRenderI18n.ru,
+  ...sessionNoticesI18n.ru,
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
+  ...sessionWarmingI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
   ...projectActionsI18n.ru,
@@ -544,6 +576,7 @@ export const dict: Record<I18nKey, string> = {
   ...mcpGridI18n.ru,
   ...pluginsGridI18n.ru,
   ...integrationsCatalogI18n.ru,
+  ...diffFindI18n.ru,
   'terminalView.actions.attachSelection': 'Прикрепить выделенный вывод',
   'terminalView.actions.copySelection': 'Копировать выделенный вывод',
   'terminalView.toast.selectionCopied': 'Вывод скопирован',

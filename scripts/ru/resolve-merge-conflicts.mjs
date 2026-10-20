@@ -154,8 +154,11 @@ const ensureRuBlock = (file) => {
   // fill-missing-keys.mjs populate it with the English fallback.
   if (!block) block = ['  ru: {', '  },'];
 
-  const closeIndex = lines.lastIndexOf('} as const;');
-  if (closeIndex < 0) fail(`${file}: не найден закрывающий "} as const;"`);
+  // Most modules end with `} as const;`, but upstream does not always write it —
+  // `diff-find.i18n.ts` (v2.5.0) ends with a plain `};`. Accept both, otherwise
+  // the block has nowhere to go and the whole sync stops.
+  const closeIndex = Math.max(lines.lastIndexOf('} as const;'), lines.lastIndexOf('};'));
+  if (closeIndex < 0) fail(`${file}: не найден закрывающий "} as const;" или "};"`);
   lines.splice(closeIndex, 0, ...block);
   writeLines(file, lines);
   return true;
@@ -423,12 +426,68 @@ const ensureModelPickerHeight = (file) => {
   return true;
 };
 
+const DOCS_SIDEBAR = 'packages/docs/sidebar.config.json';
+
+/**
+ * Every sidebar entry that carries a `translations` map, in document order.
+ * Sections are keyed by label, items by link — a page keeps its link across
+ * releases, while its label gets rewritten more often than one would hope.
+ */
+const sidebarEntries = (json) => {
+  const entries = [];
+  for (const section of json.sections ?? []) {
+    entries.push({ key: section.label, label: section.label, translations: section.translations });
+    for (const item of section.items ?? []) {
+      entries.push({ key: item.link ?? item.label, label: item.label, translations: item.translations });
+    }
+  }
+  return entries;
+};
+
+/**
+ * Docs sidebar: the fork has translated every item into Russian, upstream adds
+ * and renames pages. Git conflicts on any block upstream touches, and the file
+ * is plain JSON, so resolving it means taking upstream's version and putting the
+ * Russian values back. A page upstream renamed (v2.5.0 переименовал «Commands &
+ * Snippets» в «Chat Input») can only be matched by a link that also changed, so
+ * it stays without `ru` until a human writes the translation — the resolver
+ * lists those at the end instead of inventing a label.
+ */
+const ensureDocsSidebarRussian = (file, untranslated) => {
+  const theirs = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const oursRaw = gitOrNull('show', `HEAD:${DOCS_SIDEBAR}`);
+  const ours = oursRaw ? JSON.parse(oursRaw) : { sections: [] };
+
+  const known = new Map();
+  for (const entry of sidebarEntries(ours)) {
+    const value = entry.translations?.ru;
+    if (value) known.set(entry.key, value);
+  }
+
+  let changed = false;
+  for (const entry of sidebarEntries(theirs)) {
+    if (!entry.translations) continue;
+    if (entry.translations.ru) continue;
+    const value = known.get(entry.key);
+    if (value) {
+      entry.translations.ru = value;
+      changed = true;
+    } else {
+      untranslated.push(`${entry.label} (${entry.key})`);
+    }
+  }
+
+  if (changed) fs.writeFileSync(file, `${JSON.stringify(theirs, null, 2)}\n`, 'utf8');
+  return changed;
+};
+
 const main = () => {
   const unresolved = gitOrNull('diff', '--name-only', '--diff-filter=U') ?? '';
   const conflicted = unresolved ? unresolved.split('\n').filter(Boolean) : [];
 
   const resolved = [];
   const leftAlone = [];
+  const untranslated = [];
   const keptConflicted = new Set(conflicted.map(toGitPath).filter((file) => KEEP_CONFLICTED.has(file)));
 
   for (const file of conflicted) {
@@ -458,6 +517,10 @@ const main = () => {
       } else if (isModelPickerHeightFile(file)) {
         takeTheirs(file);
         ensureModelPickerHeight(file);
+        resolved.push(file);
+      } else if (toGitPath(file) === DOCS_SIDEBAR) {
+        takeTheirs(file);
+        ensureDocsSidebarRussian(file, untranslated);
         resolved.push(file);
       } else if (toGitPath(file) === OPEN_FOLDER_HOOK_FILE) {
         takeTheirs(file);
@@ -526,6 +589,10 @@ const main = () => {
 
   process.stderr.write(`Разрешено механически: ${resolved.length}\n`);
   for (const file of resolved) process.stderr.write(`  ok  ${file}\n`);
+  if (untranslated.length) {
+    process.stderr.write('Боковое меню документации: нужен русский текст для новых страниц:\n');
+    for (const entry of untranslated) process.stderr.write(`  ??  ${entry}\n`);
+  }
   if (leftAlone.length) {
     process.stderr.write('Остались неразрешёнными (нужна ручная работа):\n');
     for (const file of leftAlone) process.stderr.write(`  !!  ${file}\n`);
