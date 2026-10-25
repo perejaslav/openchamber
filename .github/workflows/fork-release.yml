@@ -43,7 +43,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       # The whole point of the fork. A release must not ship a broken locale.
-      # The fork guards and enhance tests catch upstream merges that silently
+      # The fork guards catch upstream merges that silently
       # drop our own edits, which a clean merge would not report. The same
       # gate runs in ru-upstream-sync.yml before `ru` is pushed, so the
       # command below is the only copy of the check list.

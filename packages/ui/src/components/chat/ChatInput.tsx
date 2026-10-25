@@ -209,9 +209,6 @@ import {
 import { runForkCommand } from './composer/submit/forkCommand';
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
-import { useEnhancePrompt } from './hooks/useEnhancePrompt';
-import { readEnhanceFallbackModel, runEnhancePrompt } from '@/lib/messages/enhancePrompt';
-import { getSessionConversationContext } from '@/sync/session-actions';
 import { useComposerDraft } from './composer/state/useComposerDraft';
 import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
@@ -1323,31 +1320,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             hasContent: currentMessage.trim().length > 0 || attachedFiles.length > 0 || hasDrafts || (!isBtwActive && hasLinkedReferences),
         };
     }, [attachedFiles.length, hasDrafts, hasLinkedReferences, isBtwActive]);
-
-    // One-click draft enhancement: the hook owns the original/result state
-    // machine, ChatInput only wires IO (small-model call with the last
-    // replicas as context, failure toast keeping the draft).
-    const enhancePrompt = useEnhancePrompt({
-        runEnhance: ({ draft, signal }) => {
-            const enhanceSessionId = (isBtwActive ? btwSessionId : currentSessionId) ?? null;
-            const fallback = readEnhanceFallbackModel();
-            return runEnhancePrompt({
-                draft,
-                signal,
-                context: enhanceSessionId ? getSessionConversationContext(enhanceSessionId) : '',
-                sessionId: enhanceSessionId,
-                fallbackProviderID: fallback.providerID,
-                fallbackModelID: fallback.modelID,
-            });
-        },
-        getDraft: () => getCurrentInputSnapshot().message,
-        setDraft: (text) => { setMessage(text); },
-        onError: () => {
-            toast.error(t('chat.chatInput.enhance.toast.failed.title'), {
-                description: t('chat.chatInput.enhance.toast.failed.description'),
-            });
-        },
-    });
 
     // Keep a ref to handleSubmit so callbacks don't depend on it.
     type SubmitOptions = {
@@ -2522,15 +2494,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             return;
         }
 
-        // Enhance rollback sits after the existing Escape branches (shell,
-        // autocomplete, btw, expanded input): cancel the request first,
-        // then restore the pre-enhance draft.
-        if (e.key === 'Escape' && enhancePrompt.handleEscape()) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-        }
-
         const cycleAgentBackwardShortcut = cycleAgentShortcut && !cycleAgentShortcut.includes('shift')
             ? normalizeCombo(`shift+${cycleAgentShortcut}`)
             : '';
@@ -2786,10 +2749,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, []);
 
     const handleComposerChange = ({ value, selection, fromPaste, insertedText, fromValueProp }: ComposerChange) => {
-        // A user edit over a shown enhance result drops its rollback state.
-        // Programmatic writes (draft restore, enhance apply/rollback) arrive
-        // flagged fromValueProp and skip this.
-        if (!fromValueProp) enhancePrompt.markEdited();
         if (largeTextPasteBehavior === 'inline-double-paste') {
             largeTextPasteGesture.change({
                 value, selection, fromPaste, insertedText,
@@ -4272,15 +4231,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         handlePermissionModeCycle();
     });
 
-    // Composer-focused only: outside the editor the binding stays free for
-    // other handlers. Open popups keep their own Escape/enter handling.
-    useKeybind('enhance_prompt', () => {
-        const active = document.activeElement;
-        if (!(active instanceof Element) || !active.closest('[data-chat-input="true"]')) return false;
-        if (hasOpenDropdown()) return false;
-        void enhancePrompt.requestEnhance();
-    });
-
     // Acknowledging the abort record is what lets the working chip resume for
     // the next run; the old "Aborted" banner that used to accompany it is gone.
     React.useEffect(() => {
@@ -4659,9 +4609,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onOpenGuestAttach={openGuestAttach}
                         onOpenAttachSheet={openMobileAttachSheet}
                         onToggleExpandedInput={handleToggleExpandedInput}
-                        onEnhancePrompt={() => { void enhancePrompt.requestEnhance(); }}
-                        enhancePromptIsEnhancing={enhancePrompt.isEnhancing}
-                        enhancePromptDisabled={message.trim().length === 0}
                         onCyclePermissionMode={handlePermissionModeCycle}
                         onPrimaryAction={handlePrimaryAction}
                         onAbort={handleAbort}

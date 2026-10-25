@@ -25,7 +25,6 @@ import { registerSessionDirectory } from "./sync-refs"
 import { useGlobalSessionStatusStore } from "./global-session-status"
 import { recordSendFailure } from "./send-failure-log"
 import { draftFromContextPayload, readContextPart, type ContextCarrierPart } from "@/lib/messages/contextParts"
-import { buildEnhanceContext } from "@/lib/messages/enhancePrompt"
 import { useInlineCommentDraftStore, type InlineCommentDraftTarget } from "@/stores/useInlineCommentDraftStore"
 import { materializeSessionSnapshots } from "./materialization"
 import { sessionEvents } from "@/lib/sessionEvents"
@@ -202,23 +201,6 @@ export function getSessionLastAssistantModel(sessionId: string): { providerID: s
     return null
   } catch {
     return null
-  }
-}
-
-/**
- * Last conversation replicas for prompt enhancement, read as a snapshot
- * (no subscription). Tool calls, tool outputs and non-text parts are
- * excluded by buildEnhanceContext; every replica is length-capped there.
- */
-export function getSessionConversationContext(sessionId: string): string {
-  try {
-    const { store } = dirStoreForSession(sessionId)
-    const state = store.getState()
-    const messages = state.message[sessionId]
-    if (!messages) return ''
-    return buildEnhanceContext(messages, (messageId) => state.part[messageId])
-  } catch {
-    return ''
   }
 }
 
