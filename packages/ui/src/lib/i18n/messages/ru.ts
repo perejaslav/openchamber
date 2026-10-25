@@ -10,13 +10,17 @@ import { pluginPanelI18n } from './plugin-panel.i18n';
 import { surfacePanelI18n } from './surface-panel.i18n';
 import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { fileContentSearchI18n } from './file-content-search.i18n';
+import { fileEditorAidsI18n } from './file-editor-aids.i18n';
 import { htmlRenderI18n } from './html-render.i18n';
 import { sessionNoticesI18n } from './session-notices.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { sessionWarmingI18n } from './session-warming.i18n';
+import { overviewI18n } from './overview.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
+import { stacksI18n } from './stacks.i18n';
+import { changeReviewI18n } from './change-review.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
 import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
@@ -562,13 +566,17 @@ export const dict: Record<I18nKey, string> = {
   ...surfacePanelI18n.ru,
   ...fileArtifactsI18n.ru,
   ...fileContentSearchI18n.ru,
+  ...fileEditorAidsI18n.ru,
   ...htmlRenderI18n.ru,
   ...sessionNoticesI18n.ru,
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...sessionWarmingI18n.ru,
+  ...overviewI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
+  ...stacksI18n.ru,
+  ...changeReviewI18n.ru,
   ...projectActionsI18n.ru,
   ...gitIdentityEditorI18n.ru,
   ...environmentI18n.ru,

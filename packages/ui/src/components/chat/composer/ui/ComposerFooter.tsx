@@ -25,8 +25,7 @@ import { isVSCodeRuntime } from '@/lib/desktop';
 import { isDictationCaptureSupported } from '@/lib/dictation/use-dictation-audio-source';
 import { ModelControls } from '../../ModelControls';
 import { ComposerActionButtons } from './ComposerActionButtons';
-import { ComposerAttachmentControls } from './ComposerAttachmentControls';
-import { EnhancePromptButton } from './EnhancePromptButton';
+import { ComposerAttachmentControls, type ComposerTrackerPicker } from './ComposerAttachmentControls';
 import { FocusModeButton } from './FocusModeButton';
 import { PermissionAutoAcceptButton } from './PermissionAutoAcceptButton';
 import type { PermissionMode } from '@/stores/utils/permissionAutoAccept';
@@ -63,18 +62,13 @@ interface ComposerFooterProps {
     onPickLocalFiles: () => void;
     onOpenGitHubPicker: () => void;
     /** The host the project's issues and change requests come from. */
-    repositoryProvider?: SourceControlProvider;
-    showLinearPicker?: boolean;
-    onOpenLinearPicker?: () => void;
+    repositoryProvider?: SourceControlProvider | null;
+    trackerPickers?: readonly ComposerTrackerPicker[];
     attachGuests?: readonly GuestAttachItem[];
     onOpenGuestAttach?: (guestId: string) => void;
     onOpenAttachSheet: () => void;
     onToggleExpandedInput: () => void;
     onCyclePermissionMode: () => void;
-    /** One-click draft enhancement (desktop footer). Absent on mobile/btw. */
-    onEnhancePrompt?: () => void;
-    enhancePromptIsEnhancing?: boolean;
-    enhancePromptDisabled?: boolean;
     onPrimaryAction: () => void;
     onAbort: () => void;
     onStartDictation: () => void;
@@ -139,16 +133,12 @@ function ComposerFooterView(props: ComposerFooterProps) {
         onPickLocalFiles,
         onOpenGitHubPicker,
         repositoryProvider,
-        showLinearPicker,
-        onOpenLinearPicker,
+        trackerPickers,
         attachGuests,
         onOpenGuestAttach,
         onOpenAttachSheet,
         onToggleExpandedInput,
         onCyclePermissionMode,
-        onEnhancePrompt,
-        enhancePromptIsEnhancing = false,
-        enhancePromptDisabled = false,
         onPrimaryAction,
         onAbort,
         onStartDictation,
@@ -198,8 +188,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                                 handlePickLocalFiles={onPickLocalFiles}
                                 openGitHubPicker={onOpenGitHubPicker}
                                 repositoryProvider={repositoryProvider}
-                                showLinearPicker={showLinearPicker}
-                                openLinearPicker={onOpenLinearPicker}
+                                trackerPickers={trackerPickers}
                                 onOpenSettings={isBtw ? undefined : onOpenSettings}
                                 onOpenMobileSheet={onOpenAttachSheet}
                                 attachGuests={attachGuests}
@@ -272,8 +261,7 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             handlePickLocalFiles={onPickLocalFiles}
                             openGitHubPicker={onOpenGitHubPicker}
                             repositoryProvider={repositoryProvider}
-                            showLinearPicker={showLinearPicker}
-                            openLinearPicker={onOpenLinearPicker}
+                            trackerPickers={trackerPickers}
                             onOpenSettings={isBtw ? undefined : onOpenSettings}
                             attachGuests={attachGuests}
                             onOpenGuestAttach={onOpenGuestAttach}
@@ -284,13 +272,6 @@ function ComposerFooterView(props: ComposerFooterProps) {
                             iconSizeClass={iconSizeClass}
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
-                        /> : null}
-                        {!isBtw && onEnhancePrompt ? <EnhancePromptButton
-                            footerIconButtonClass={footerIconButtonClass}
-                            iconSizeClass={iconSizeClass}
-                            isEnhancing={enhancePromptIsEnhancing}
-                            disabled={enhancePromptDisabled}
-                            onEnhance={onEnhancePrompt}
                         /> : null}
                         <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}
