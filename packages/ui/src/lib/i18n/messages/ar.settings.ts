@@ -1406,7 +1406,6 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'النموذج المفضل السابق',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'فتح محدد النموذج',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'توسيع حقل الإدخال',
-  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'فتح المخطط الزمني للمحادثة',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'إظهار/إخفاء متصفح الطلبات',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'يشترك هذا التسلسل في بادئة سياقية مع {action}. يأخذ ذلك الإجراء الأولوية عندما يكون سياقه نشطًا.',

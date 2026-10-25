@@ -439,7 +439,7 @@ export const settingsLayoutI18n = {
     'settings.layout.chat.section.formatting': 'Форматирование',
     'settings.layout.chat.section.sending': 'Отправка',
     'settings.layout.chat.section.draftsAndHistory': 'Черновики и история',
-    'settings.layout.sessions.helperModels.title': 'Вспомогательные модели',
+    'settings.layout.sessions.helperModels.title': 'Другие модели',
     'settings.layout.sessions.sidebar.title': 'Боковая панель',
     'settings.layout.sessions.retention.target': 'Относится к',
     'settings.layout.sessions.retention.target.unarchived': 'Неархивированные сессии',

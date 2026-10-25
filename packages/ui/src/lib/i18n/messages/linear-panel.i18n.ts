@@ -91,9 +91,9 @@ export const linearPanelI18n = {
     'tracker.priority.low': 'נמוכה',
   },
   ru: {
-    'contextPanel.linear.priority.urgent': 'Срочный',
-    'contextPanel.linear.priority.high': 'Высокий',
-    'contextPanel.linear.priority.medium': 'Средний',
-    'contextPanel.linear.priority.low': 'Низкий',
+    'tracker.priority.urgent': 'Срочный',
+    'tracker.priority.high': 'Высокий',
+    'tracker.priority.medium': 'Средний',
+    'tracker.priority.low': 'Низкий',
   },
 } as const;

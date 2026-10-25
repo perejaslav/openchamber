@@ -1406,7 +1406,6 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_forward.label': 'お気に入りモデルを次へ',
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'お気に入りモデルを前へ',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': '入力を拡大',
-  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'モデルセレクターを開く',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': '会話タイムラインを開く',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'プロンプトナビゲーターの表示切替',

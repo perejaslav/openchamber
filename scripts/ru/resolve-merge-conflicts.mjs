@@ -20,7 +20,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FORK_ONLY_KEY_RE } from './fork-keys.mjs';
 import { OPEN_FOLDER_HOOK_FILE, ensureOpenFolderHooks } from './fork-hooks.mjs';
 
 const I18N_DIR = 'packages/ui/src/lib/i18n';
@@ -60,7 +59,9 @@ const RUSSIAN_LABEL_KEY = 'common.language.russian';
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const gitOrNull = (...args) => {
   try {
-    return git(...args);
+    // `git show HEAD:<path>` fails for every module upstream has just added, and
+    // its stderr used to land in the sync log as lines that look like failures.
+    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return null;
   }
@@ -76,6 +77,21 @@ const fail = (message) => {
 /** Take upstream's side of a conflicted file and stage it. */
 const takeTheirs = (file) => {
   git('checkout', '--theirs', '--', toGitPath(file));
+};
+
+/**
+ * Which sides of a conflicted path git still has: 1 — base, 2 — ours, 3 — theirs.
+ * A path deleted on one side has no such stage, so `git checkout --theirs` dies
+ * with «does not have their version» instead of resolving anything.
+ */
+const unmergedStages = (file) => {
+  const raw = gitOrNull('ls-files', '-u', '--', toGitPath(file)) ?? '';
+  const stages = new Set();
+  for (const line of raw.split('\n')) {
+    const match = line.match(/^\d+ [0-9a-f]+ ([123])\t/);
+    if (match) stages.add(Number(match[1]));
+  }
+  return stages;
 };
 
 /** The `xx: { ... }` block of a module dictionary file, as raw lines. */
@@ -116,16 +132,23 @@ const keyOfLine = (line) => {
 };
 
 /**
- * Fork-only строки (`chat.chatInput.enhance.*`) есть в каждом словаре, а апстрим
- * их не знает. При takeTheirs они выпадают, поэтому возвращаем их из HEAD — версии
- * форка до мержа — и вставляем перед спредами, как русскую метку.
+ * Fork-only строки в словарях: апстрим их не знает, и при takeTheirs они
+ * выпадают. Возвращаем их из HEAD — версии форка до мержа — и вставляем перед
+ * спредами, как русскую метку.
+ *
+ * Сейчас список пуст: единственные такие строки были у кнопки «Улучшить
+ * промпт», а её в форке больше нет. Механизм оставлен, чтобы следующая
+ * форк-строка не потребовала заново писать этот обход.
  */
+const FORK_ONLY_KEYS = [];
+
 const ensureForkOnlyKeys = (file) => {
+  if (!FORK_ONLY_KEYS.length) return false;
   const ours = gitOrNull('show', `HEAD:${toGitPath(file)}`);
   if (!ours) return false;
   const forkLines = ours.split('\n').filter((line) => {
     const key = keyOfLine(line);
-    return key !== null && FORK_ONLY_KEY_RE.test(key);
+    return key !== null && FORK_ONLY_KEYS.includes(key);
   });
   if (!forkLines.length) return false;
 
@@ -247,6 +270,20 @@ const ensureRuModuleWiring = (file) => {
   const lines = readLines(file);
   let changed = false;
 
+  // A module upstream deleted keeps its import in this file after a mechanical
+  // merge, and the build then fails on «cannot find module». en.ts is the list
+  // of modules that still exist, so anything else goes.
+  const bindings = new Set(enModules.map((entry) => entry.binding));
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const imported = lines[index].match(MODULE_IMPORT_RE);
+    const spread = lines[index].match(/^\s*\.\.\.(\w+)\.ru,$/);
+    const binding = imported?.[1] ?? spread?.[1];
+    if (binding && !bindings.has(binding)) {
+      lines.splice(index, 1);
+      changed = true;
+    }
+  }
+
   // Imports, in en.ts order: each missing one lands right after the import it
   // follows upstream, so the list stays a mirror of en.ts.
   let importAnchor = lines.findIndex((line) => /^import \{ settingsDict \} from '\.\//.test(line));
@@ -321,6 +358,19 @@ const ensureRuSettingsModuleWiring = (file) => {
 
   const lines = readLines(file);
   let changed = false;
+
+  // Same as in ru.ts: a module upstream deleted must lose its import and spread
+  // here too, or type-check fails on a module that no longer exists.
+  const enBindings = new Set(enModules.map((entry) => entry.binding));
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const imported = lines[index].match(MODULE_IMPORT_RE);
+    const spread = lines[index].match(/^\s*\.\.\.(\w+)\.ru,$/);
+    const binding = imported?.[1] ?? spread?.[1];
+    if (binding && !enBindings.has(binding)) {
+      lines.splice(index, 1);
+      changed = true;
+    }
+  }
 
   let importAnchor = -1;
   lines.forEach((line, index) => {
@@ -405,7 +455,8 @@ const isModelPickerHeightFile = (file) => MODEL_PICKER_HEIGHT_RULES.some((rule) 
  * в них остаётся, синк останавливается и открывает issue.
  *
  * - ModelControls.tsx — попап модели (высота, shift, список).
- * - en.ts / ru.ts — enhance-ключи (`chat.chatInput.enhance.*`) и русская часть.
+ * - en.ts / ru.ts — правки словарей, которые takeTheirs разнёс бы по разным
+ *   локалям и потерял русскую часть.
  */
 const KEEP_CONFLICTED = new Set([
   'packages/ui/src/components/chat/ModelControls.tsx',
@@ -486,6 +537,7 @@ const main = () => {
   const conflicted = unresolved ? unresolved.split('\n').filter(Boolean) : [];
 
   const resolved = [];
+  const removed = [];
   const leftAlone = [];
   const untranslated = [];
   const keptConflicted = new Set(conflicted.map(toGitPath).filter((file) => KEEP_CONFLICTED.has(file)));
@@ -494,6 +546,24 @@ const main = () => {
     const base = path.basename(file);
     if (keptConflicted.has(toGitPath(file))) {
       leftAlone.push(file);
+      continue;
+    }
+    const stages = unmergedStages(file);
+    // Upstream deleted a file the fork had translated (v2.5.1 replaced the
+    // Linear integration with a generic tracker one). There is no upstream side
+    // to take — the file is simply gone, and so is its Russian block. The stale
+    // `import` and spread it leaves in ru.ts / ru.settings.ts are pruned by the
+    // wiring passes below.
+    if (!stages.has(3)) {
+      git('rm', '-q', '-f', '--', toGitPath(file));
+      removed.push(file);
+      continue;
+    }
+    // The fork deleted it and upstream kept editing it: upstream wins, the fork
+    // has no opinion left about a file it removed.
+    if (!stages.has(2)) {
+      takeTheirs(file);
+      resolved.push(file);
       continue;
     }
     try {
@@ -589,6 +659,10 @@ const main = () => {
 
   process.stderr.write(`Разрешено механически: ${resolved.length}\n`);
   for (const file of resolved) process.stderr.write(`  ok  ${file}\n`);
+  if (removed.length) {
+    process.stderr.write(`Удалено вслед за апстримом: ${removed.length}\n`);
+    for (const file of removed) process.stderr.write(`  rm  ${file}\n`);
+  }
   if (untranslated.length) {
     process.stderr.write('Боковое меню документации: нужен русский текст для новых страниц:\n');
     for (const entry of untranslated) process.stderr.write(`  ??  ${entry}\n`);
@@ -598,7 +672,7 @@ const main = () => {
     for (const file of leftAlone) process.stderr.write(`  !!  ${file}\n`);
   }
 
-  process.stdout.write(`${JSON.stringify({ resolved, leftAlone }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ resolved, removed, leftAlone }, null, 2)}\n`);
   process.exit(leftAlone.length ? 1 : 0);
 };
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Release gate of the RU fork: locale parity, fork-feature guards, enhance
- * tests and the type-check of all packages. Runs before pushing `ru`
+ * Release gate of the RU fork: locale parity, fork-feature guards and the
+ * type-check of all packages. Runs before pushing `ru`
  * (`ru-upstream-sync.yml`) and before building a release
  * (`fork-release.yml`) — one command, one place, so a broken upstream merge
  * can neither go public nor ship. The test list lives only here.
@@ -13,17 +13,20 @@ import { spawnSync } from 'node:child_process';
 
 const steps = [
   {
-    name: 'fork tests (i18n, fork-guards, enhance)',
+    name: 'fork tests (i18n, fork-guards)',
     cmd: 'bun',
     args: [
       'test',
       'packages/ui/src/lib/i18n',
       'packages/ui/src/lib/fork-guards.test.ts',
-      'packages/ui/src/components/chat/hooks/useEnhancePrompt.test.ts',
-      'packages/ui/src/lib/messages/enhancePrompt.test.ts',
     ],
   },
-  { name: 'workspace type-check', cmd: 'bun', args: ['run', 'type-check'] },
+  // `bun run type-check` cannot be used here: upstream's root script is
+  // `bun check -b && …`, and `bun check` is not a script any package defines —
+  // upstream's own CI never runs that line, so the typo lives on. `tsc -b`
+  // over the root project references is what the line clearly means, and it
+  // compiles every package including the electron one.
+  { name: 'workspace type-check (tsc -b)', cmd: 'bunx', args: ['tsc', '-b'] },
 ];
 
 for (const step of steps) {

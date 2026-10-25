@@ -1277,7 +1277,6 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_favorite_model_backward.label': 'Faire défiler le modèle favori vers l\'arrière',
   'settings.openchamber.keyboardShortcuts.action.open_model_selector.label': 'Ouvrir le sélecteur de modèle',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Développer l\'entrée',
-  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.open_timeline_dialog.label': 'Ouvrir la chronologie de la conversation',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Afficher ou masquer le navigateur de prompts',
   'settings.openchamber.keyboardShortcuts.warning.contextualPrefix': 'Cette séquence partage un préfixe contextuel avec {action}. Lorsque son contexte est actif, cette action est prioritaire.',

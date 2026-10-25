@@ -882,7 +882,6 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.cycle_theme.label': 'Przełącz motyw',
   'settings.openchamber.keyboardShortcuts.action.cycle_agent.label': 'Przełącz agenta',
   'settings.openchamber.keyboardShortcuts.action.expand_input.label': 'Rozwiń pole wprowadzania',
-  'settings.openchamber.keyboardShortcuts.action.enhance_prompt.label': 'Enhance prompt',
   'settings.openchamber.keyboardShortcuts.action.toggle_prompt_navigator.label': 'Przełącz nawigator promptów',
   'settings.openchamber.keyboardShortcuts.action.focus_input.label': 'Skup pole wprowadzania',
   'settings.openchamber.keyboardShortcuts.action.new_chat.label': 'Nowa sesja',
