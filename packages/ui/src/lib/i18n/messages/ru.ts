@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './ru.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { referencePickerI18n } from './reference-picker.i18n';
+import { repositoryDiscussionsI18n } from './repository-discussions.i18n';
 import { sessionMenuHintsI18n } from './session-menu-hints.i18n';
 import { projectKnowledgeI18n } from './project-knowledge.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
@@ -16,6 +17,9 @@ import { sessionNoticesI18n } from './session-notices.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { sessionWarmingI18n } from './session-warming.i18n';
+import { heapSnapshotI18n } from './heap-snapshot.i18n';
+import { sidebarWorkI18n } from './sidebar-work.i18n';
+import { worktreeArchiveI18n } from './worktree-archive.i18n';
 import { overviewI18n } from './overview.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
@@ -29,6 +33,11 @@ import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
+import { markdownGithubI18n } from './markdown-github.i18n';
+import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
+import { workflowsI18n } from './workflows.i18n';
+import { sessionReferencesI18n } from './session-references.i18n';
+import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode входит в состав OpenChamber. Обновите OpenChamber, чтобы получить OpenCode v2.",
@@ -570,6 +579,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.ru,
   ...referencePickerI18n.ru,
+  ...repositoryDiscussionsI18n.ru,
   ...sessionMenuHintsI18n.ru,
   ...projectKnowledgeI18n.ru,
   ...linearPanelI18n.ru,
@@ -584,6 +594,9 @@ export const dict: Record<I18nKey, string> = {
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...sessionWarmingI18n.ru,
+  ...heapSnapshotI18n.ru,
+  ...sidebarWorkI18n.ru,
+  ...worktreeArchiveI18n.ru,
   ...overviewI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
@@ -597,6 +610,11 @@ export const dict: Record<I18nKey, string> = {
   ...pluginsGridI18n.ru,
   ...integrationsCatalogI18n.ru,
   ...diffFindI18n.ru,
+  ...markdownGithubI18n.ru,
+  ...autocompleteScopeI18n.ru,
+  ...workflowsI18n.ru,
+  ...sessionReferencesI18n.ru,
+  ...guestStatusViewI18n.ru,
   'terminalView.actions.attachSelection': 'Прикрепить выделенный вывод',
   'terminalView.actions.copySelection': 'Копировать выделенный вывод',
   'terminalView.toast.selectionCopied': 'Вывод скопирован',
