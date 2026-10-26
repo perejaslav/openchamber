@@ -172,28 +172,25 @@ jobs:
 
           if git merge-base --is-ancestor "$REF" HEAD; then
             echo "Ветка уже содержит ${REF} — мержить нечего."
-            exit 0
-          fi
-
-          if git merge --no-edit "$REF"; then
+          elif git merge --no-edit "$REF"; then
             echo "Мерж ${REF} прошёл без конфликтов."
-            exit 0
+          else
+            # Files the fork owns outright: a conflict here is resolved in our
+            # favour, exactly as FORK.md tells a human to do it.
+            for file in $OURS_ON_CONFLICT; do
+              if git ls-files -u -- "$file" | grep -q .; then
+                echo "Конфликт в ${file}: оставляю нашу версию."
+                git checkout --ours -- "$file"
+                git add -- "$file"
+              fi
+            done
           fi
 
-          # Files the fork owns outright: a conflict here is resolved in our
-          # favour, exactly as FORK.md tells a human to do it.
-          for file in $OURS_ON_CONFLICT; do
-            if git ls-files -u -- "$file" | grep -q .; then
-              echo "Конфликт в ${file}: оставляю нашу версию."
-              git checkout --ours -- "$file"
-              git add -- "$file"
-            fi
-          done
-
-          # Upstream adds locales, the fork adds Russian in the same places, so
-          # this conflict set is expected on every release. The resolver handles
-          # the well-understood part; anything it does not recognise stays
-          # conflicted and stops the release.
+          # The resolver has to run on a conflict-free merge as well. A release
+          # that only adds modules (`*.i18n.ts` of v2.5.2) conflicts nowhere, yet
+          # each new module still needs its `ru` block and its import and spread
+          # in `ru.ts` / `ru.settings.ts` — without them the dictionary
+          # reconciliation fails and nothing is released.
           if ! node scripts/ru/resolve-merge-conflicts.mjs > "$WORK_DIR/resolve.json" 2> "$WORK_DIR/resolve.log"; then
             {
               echo "Мерж ${REF}: часть конфликтов не удалось разрешить автоматически."
@@ -208,8 +205,14 @@ jobs:
           fi
           cat "$WORK_DIR/resolve.log"
 
-          git commit --no-edit
-          echo "Мерж ${REF} завершён после механического разрешения конфликтов."
+          if [ -f .git/MERGE_HEAD ]; then
+            git commit --no-edit
+            echo "Мерж ${REF} завершён после механического разрешения конфликтов."
+          else
+            # A clean merge is already committed; the resolver's edits are left
+            # for the dictionary commit below, which stages everything.
+            echo "Правки словарей после мержа закоммитит следующий шаг."
+          fi
 
       - name: Install dependencies
         if: steps.target.outputs.skip != 'true'
@@ -220,8 +223,11 @@ jobs:
         run: |
           set -uo pipefail
 
-          node scripts/ru/fill-missing-keys.mjs > "$WORK_DIR/fill.json" 2> "$WORK_DIR/fill.log"
-          FILL_STATUS=$?
+          # The runner starts every step with `bash -e`, so a failing node would
+          # abort the step before the reason is written and the issue would say
+          # «Причина не записана». Capture the status instead.
+          FILL_STATUS=0
+          node scripts/ru/fill-missing-keys.mjs > "$WORK_DIR/fill.json" 2> "$WORK_DIR/fill.log" || FILL_STATUS=$?
           cat "$WORK_DIR/fill.log"
 
           if [ "$FILL_STATUS" -ne 0 ]; then

@@ -61,5 +61,7 @@ export const sessionReferencesI18n = {
     'chat.sessionReference.unavailable': "השיחה או ההודעה הזו אינה בשרת זה, או שלא ניתן היה לקרוא אותה. הקישור נשאר כטקסט.",
   },
   ru: {
+    'chat.fileMentionAutocomplete.sessionArchived': "в архиве",
+    'chat.sessionReference.unavailable': "Этой сессии или сообщения нет на этом сервере, либо их не удалось прочитать. Ссылка остаётся текстом.",
   },
 } as const;
