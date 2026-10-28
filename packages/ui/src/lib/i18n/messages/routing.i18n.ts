@@ -2112,7 +2112,7 @@ export const routingI18n = {
     'settings.classification.source.off.description': 'Ничего никуда не отправляется. Предохранитель и «Авто» скрыты, а сессии переходят в работу только тогда, когда вы их переключите.',
     'settings.classification.source.zenPromo.name': 'Промоакция OpenCode Zen',
     'settings.classification.source.zenPromo.description': 'Бесплатно в течение ограниченного времени, ключ не нужен. Когда промоакция закончится, переключитесь на ключ.',
-    'settings.classification.source.zenPromo.ended': 'Промоакция завершилась.',
+    'settings.classification.source.zenPromo.unavailable': 'Временно недоступно. Пока добавьте API-ключ OpenCode Zen.',
     'settings.classification.source.zenKey.name': 'Ключ OpenCode Zen',
     'settings.classification.source.zenKey.description': 'API-ключ Zen, сохранённый в OpenCode, списывается с вашего баланса Zen.',
     'settings.classification.source.zenKey.missing': 'В OpenCode нет API-ключа Zen. Вход с учётной записью OpenCode не считается: добавьте API-ключ провайдеру OpenCode Zen.',

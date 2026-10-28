@@ -226,5 +226,18 @@ export const imageToolI18n = {
     'chat.image.downloadFailed': 'לא ניתן לשמור את התמונה.',
   },
   ru: {
+    'settings.openchamber.tools.field.agentImageTool': 'Инструмент изображений для агентов',
+    'settings.openchamber.tools.field.agentImageToolSummary': 'Агенты создают и правят изображения выбранной вами моделью.',
+    'settings.openchamber.tools.field.agentImageToolInfo': 'Агент описывает картинку и получает обратно файлы изображений, которые показываются в чате. Модель чата остаётся прежней. Каждое изображение оплачивается по тарифам провайдера модели изображений.',
+    'settings.openchamber.tools.field.agentImageToolAria': 'Включить инструмент изображений для агентов',
+    'settings.openchamber.tools.imageModel.label': 'Модель изображений',
+    'settings.openchamber.tools.imageModel.info': 'Модель, которая рисует. В списке только модели, генерирующие изображения.',
+    'settings.openchamber.tools.imageModel.aria': 'Модель изображений',
+    'settings.openchamber.tools.imageModel.placeholder': 'Выберите модель',
+    'settings.openchamber.tools.imageModel.empty': 'У ваших провайдеров нет моделей изображений',
+    'settings.openchamber.tools.imageModel.loadFailed': 'Не удалось загрузить модели',
+    'settings.openchamber.tools.imageModel.unavailable': '{model} (недоступна)',
+    'chat.image.download': 'Скачать изображение',
+    'chat.image.downloadFailed': 'Не удалось сохранить изображение.',
   },
 } as const;

@@ -121,5 +121,11 @@ export const documentToolbarI18n = {
     'documentToolbar.autoSave': '自動儲存',
   },
   ru: {
+    'documentToolbar.moreActions': 'Ещё действия',
+    'documentToolbar.preview': 'Предпросмотр',
+    'documentToolbar.tableView': 'Таблица',
+    'documentToolbar.treeView': 'Дерево',
+    'documentToolbar.wrapLines': 'Перенос строк',
+    'documentToolbar.autoSave': 'Автосохранение',
   },
 } as const;

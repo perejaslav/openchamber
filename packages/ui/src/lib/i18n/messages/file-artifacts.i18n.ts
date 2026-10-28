@@ -300,8 +300,6 @@ export const fileArtifactsI18n = {
     'filesView.artifact.table.rowsPlural': '{rows} строк · {columns} столбцов',
     'filesView.artifact.table.truncated': 'Показаны первые {shown} из {total} строк',
     'filesView.artifact.table.empty': 'В этом файле нет строк.',
-    'filesView.artifact.table.showTable': 'Показать как таблицу',
-    'filesView.artifact.table.showSource': 'Показать исходник',
     'filesView.artifact.binary.title': 'Нет предпросмотра для этого файла',
     'filesView.artifact.binary.description': 'OpenChamber не декодирует файлы такого типа. Скачайте файл, чтобы открыть его в другом приложении.',
     'filesView.artifact.binary.descriptionWithType': 'OpenChamber не декодирует файлы {extension}. Скачайте файл, чтобы открыть его в другом приложении.',
