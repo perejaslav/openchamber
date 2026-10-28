@@ -13,11 +13,15 @@ import { fileArtifactsI18n } from './file-artifacts.i18n';
 import { fileContentSearchI18n } from './file-content-search.i18n';
 import { fileEditorAidsI18n } from './file-editor-aids.i18n';
 import { htmlRenderI18n } from './html-render.i18n';
+import { documentToolbarI18n } from './document-toolbar.i18n';
 import { sessionNoticesI18n } from './session-notices.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { sessionWarmingI18n } from './session-warming.i18n';
 import { heapSnapshotI18n } from './heap-snapshot.i18n';
+import { consoleBudgetsI18n } from './console-budgets.i18n';
+import { imageToolI18n } from './image-tool.i18n';
+import { snippetsI18n } from './snippets.i18n';
 import { sidebarWorkI18n } from './sidebar-work.i18n';
 import { worktreeArchiveI18n } from './worktree-archive.i18n';
 import { overviewI18n } from './overview.i18n';
@@ -615,11 +619,15 @@ export const dict: Record<I18nKey, string> = {
   ...fileContentSearchI18n.ru,
   ...fileEditorAidsI18n.ru,
   ...htmlRenderI18n.ru,
+  ...documentToolbarI18n.ru,
   ...sessionNoticesI18n.ru,
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...sessionWarmingI18n.ru,
   ...heapSnapshotI18n.ru,
+  ...consoleBudgetsI18n.ru,
+  ...imageToolI18n.ru,
+  ...snippetsI18n.ru,
   ...sidebarWorkI18n.ru,
   ...worktreeArchiveI18n.ru,
   ...overviewI18n.ru,

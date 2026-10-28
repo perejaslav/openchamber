@@ -13,11 +13,14 @@ import { spawnSync } from 'node:child_process';
 
 const steps = [
   {
-    name: 'fork tests (i18n, fork-guards)',
+    name: 'fork tests (i18n, easter-eggs, fork-guards)',
     cmd: 'bun',
     args: [
       'test',
       'packages/ui/src/lib/i18n',
+      // Upstream's easter-egg copy has one file per UI locale and fails without
+      // a `ru` one, the same way the dictionaries do (v2.5.3 broke the sync).
+      'packages/ui/src/lib/easter-eggs',
       'packages/ui/src/lib/fork-guards.test.ts',
     ],
   },
