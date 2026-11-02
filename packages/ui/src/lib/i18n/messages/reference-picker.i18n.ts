@@ -2156,5 +2156,8 @@ export const referencePickerI18n = {
     'references.picker.preview.reviewers': 'Рецензенты',
     'references.picker.preview.stateMenuAria': 'Изменить состояние ({state})',
     'references.picker.preview.refresh': 'Обновить',
+    'references.link.copy': 'Copy link (не переведено)',
+    'references.link.copied': 'Link copied (не переведено)',
+    'references.link.copyFailed': 'Could not copy the link (не переведено)',
   },
 } as const;

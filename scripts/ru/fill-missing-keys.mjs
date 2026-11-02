@@ -95,18 +95,51 @@ const dictRange = (lines, declarationRe) => {
   return { start: start + 1, end, insertAt: insertAt < 0 ? end : insertAt };
 };
 
-/** The `xx: { ... }` block of a module dictionary file. */
+/**
+ * The `xx: { ... }` block of a module dictionary file.
+ *
+ * Upstream writes most modules one key per line, but not all: `ui-blocks.i18n.ts`
+ * (v2.6.0) keeps every locale on a single compact line. Missing that shape made
+ * the whole sync die with `no "en" block` on a file that plainly has one. Both
+ * forms are accepted; `compact` says which one this is, and the rebuild keeps
+ * the compact layout when English uses it.
+ */
 const localeRange = (lines, locale) => {
   const start = lines.findIndex((line) => line === `  ${locale}: {`);
-  if (start < 0) return null;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^  \},?$/.test(lines[i])) return { start: start + 1, end: i };
+  if (start >= 0) {
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^  \},?$/.test(lines[i])) {
+        return { start: start + 1, end: i, blockStart: start, blockEnd: i, compact: false };
+      }
+    }
+    throw new Error(`unterminated "${locale}" block`);
   }
-  throw new Error(`unterminated "${locale}" block`);
+
+  const compact = lines.findIndex(
+    (line) => line.startsWith(`  ${locale}: {`) && /\},?\s*$/.test(line),
+  );
+  if (compact >= 0) {
+    return { start: compact, end: compact + 1, blockStart: compact, blockEnd: compact, compact: true };
+  }
+  return null;
 };
+
+/** `'key': 'value'` pairs inside a compact one-line locale block, quotes kept as written. */
+const PAIR_RE = /(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*:\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g;
+const KEY_AND_QUOTE_RE = /^(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')\s*:/;
+
+const parsePairs = (line) =>
+  [...line.matchAll(PAIR_RE)].map((match) => {
+    const key = KEY_AND_QUOTE_RE.exec(match[0]);
+    return { key: key?.[1] ?? key?.[2] ?? '', text: match[0] };
+  });
 
 const collectKeys = (lines, range) => {
   const keys = new Map();
+  if (range.compact) {
+    for (const pair of parsePairs(lines[range.start])) keys.set(pair.key, pair.text);
+    return keys;
+  }
   for (let i = range.start; i < range.end; i += 1) {
     const key = keyOf(lines[i]);
     if (key !== null) keys.set(key, lines[i]);
@@ -206,7 +239,14 @@ const main = () => {
 
       // Rebuild in English's order: covers a gap and a reordering in one pass.
       const rebuilt = enKeyList.map((key) => ruKeys.get(key) ?? fillLine(key));
-      ruLines.splice(ruRange.start, ruRange.end - ruRange.start, ...rebuilt);
+      if (enRange.compact) {
+        // Keep upstream's one-line layout instead of splitting the file into
+        // styles; the range covers the whole `ru` block in either shape.
+        const line = `  ru: { ${rebuilt.join(', ')} },`;
+        ruLines.splice(ruRange.blockStart, ruRange.blockEnd - ruRange.blockStart + 1, line);
+      } else {
+        ruLines.splice(ruRange.start, ruRange.end - ruRange.start, ...rebuilt);
+      }
     } else {
       if (!missing.length && !dropped.length) continue;
 

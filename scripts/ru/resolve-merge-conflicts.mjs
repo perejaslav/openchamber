@@ -98,7 +98,13 @@ const unmergedStages = (file) => {
 const extractLocaleBlock = (text, locale) => {
   const lines = text.split('\n');
   const start = lines.findIndex((line) => line === `  ${locale}: {`);
-  if (start < 0) return null;
+  if (start < 0) {
+    // `ui-blocks.i18n.ts` keeps every locale on one compact line.
+    const compact = lines.findIndex(
+      (line) => line.startsWith(`  ${locale}: {`) && /\},?\s*$/.test(line),
+    );
+    return compact >= 0 ? [lines[compact]] : null;
+  }
   for (let i = start + 1; i < lines.length; i += 1) {
     if (/^  \},?$/.test(lines[i])) return lines.slice(start, i + 1);
   }
@@ -167,7 +173,10 @@ const ensureForkOnlyKeys = (file) => {
 /** Put the fork's `ru` block back into a module dictionary, keeping upstream's edits. */
 const ensureRuBlock = (file) => {
   const lines = readLines(file);
-  if (lines.some((line) => line === '  ru: {')) return false;
+  const hasRuBlock = lines.some(
+    (line) => line === '  ru: {' || (line.startsWith('  ru: {') && /\},?\s*$/.test(line)),
+  );
+  if (hasRuBlock) return false;
 
   // Our pre-merge version is still reachable through HEAD, because the merge is
   // still in progress.

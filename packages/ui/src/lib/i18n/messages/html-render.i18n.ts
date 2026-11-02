@@ -264,6 +264,7 @@ export const htmlRenderI18n = {
     'chat.htmlRender.waiting': 'Ждёт вашего ответа на странице',
     'chat.htmlRender.answered': 'Ответ: {summary}',
     'chat.htmlRender.answeredInChat': 'Ответ в чате',
+    'chat.htmlRender.chatSentEarlier': 'You wrote in the chat before this page (не переведено)',
     'chat.htmlRender.unanswered': 'Без ответа',
     'chat.htmlRender.answerFailed': 'Не удалось отправить ответ',
     'settings.openchamber.tools.field.agentRenderTool': 'Инструмент отображения для агентов',
