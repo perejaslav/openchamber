@@ -228,7 +228,7 @@ export const projectActionsI18n = {
   ru: {
     'settings.openchamber.keyboardShortcuts.action.open_project_actions.label': 'Открыть действия проекта',
     'helpDialog.item.openProjectActions': 'Запустить или остановить действие проекта',
-    'projectActions.header.allActions': 'All actions (не переведено)',
+    'projectActions.header.allActions': 'Все действия',
     'projectActions.dialog.title': 'Действия проекта',
     'projectActions.dialog.description': 'Запуск или остановка действия текущего проекта.',
     'projectActions.dialog.placeholder': 'Поиск действий',

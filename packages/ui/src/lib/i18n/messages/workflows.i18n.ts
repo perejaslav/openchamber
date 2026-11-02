@@ -1190,7 +1190,7 @@ export const workflowsI18n = {
     'chat.workflow.actionFailed': 'Воркфлоу не принял это действие',
     'chat.workflow.phase.unphased': 'Другие агенты',
     'chat.workflow.unavailable': 'Этого запуска воркфлоу больше нет на сервере.',
-    'chat.workflow.turnedOff': "Workflows are turned off. Turn on the workflow tool in Settings → General → OpenChamber Tools. (не переведено)",
+    'chat.workflow.turnedOff': "Workflows отключены. Включите инструмент workflow в Настройки → Общие → Инструменты OpenChamber.",
     'chat.workflow.loading': 'Загрузка воркфлоу',
     'chat.workflow.loadFailed': 'Не удалось загрузить этот запуск воркфлоу.',
     'chat.workflow.report.completed': 'Воркфлоу завершён: {name}',
