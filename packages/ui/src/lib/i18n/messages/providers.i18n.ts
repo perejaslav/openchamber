@@ -1242,6 +1242,8 @@ export const providersI18n = {
     'settings.providers.card.status.environment': 'Из окружения',
     'settings.providers.card.status.signInNeeded': 'Вы не вошли',
     'settings.providers.card.status.reauthNeeded': 'Войдите снова',
+    'settings.providers.card.status.noModels': 'No models (не переведено)',
+    'settings.providers.page.models.none': 'OpenCode lists no models for this provider. (не переведено)',
     'settings.providers.card.source.project': 'Проект',
     'settings.providers.page.back': 'Все провайдеры',
     'settings.providers.page.configuredIn': 'Настроено в {sources}',
