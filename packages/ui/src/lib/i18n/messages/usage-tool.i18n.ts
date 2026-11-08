@@ -91,5 +91,9 @@ export const usageToolI18n = {
     'settings.openchamber.tools.field.agentUsageToolAria': 'הפעלת כלי השימוש לסוכנים',
   },
   ru: {
+    'settings.openchamber.tools.field.agentUsageTool': 'Agent usage tool (не переведено)',
+    'settings.openchamber.tools.field.agentUsageToolSummary': 'Let agents check your provider limits and when they reset. (не переведено)',
+    'settings.openchamber.tools.field.agentUsageToolInfo': 'Agents see what the Usage page shows, without the account each provider is signed in with. Every check asks your providers again. (не переведено)',
+    'settings.openchamber.tools.field.agentUsageToolAria': 'Enable the agent usage tool (не переведено)',
   },
 } as const;

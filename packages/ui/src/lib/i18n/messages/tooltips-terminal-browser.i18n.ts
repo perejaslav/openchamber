@@ -136,5 +136,12 @@ export const tooltipsTerminalBrowserI18n = {
     'contextTooltips.terminalBrowser.device.schemeDark': '以深色模式顯示頁面',
   },
   ru: {
+    'contextTooltips.terminalBrowser.terminal.newTab': 'New terminal tab (не переведено)',
+    'contextTooltips.terminalBrowser.quickKeys.escape': 'Send Escape key (не переведено)',
+    'contextTooltips.terminalBrowser.quickKeys.holdModifier': 'Hold {key} for the next key (не переведено)',
+    'contextTooltips.terminalBrowser.quickKeys.releaseModifier': 'Release {key} (не переведено)',
+    'contextTooltips.terminalBrowser.device.schemeSystem': 'Use system appearance (не переведено)',
+    'contextTooltips.terminalBrowser.device.schemeLight': 'Show page in light mode (не переведено)',
+    'contextTooltips.terminalBrowser.device.schemeDark': 'Show page in dark mode (не переведено)',
   },
 };

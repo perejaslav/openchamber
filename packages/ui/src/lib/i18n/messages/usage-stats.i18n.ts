@@ -947,6 +947,7 @@ export const usageStatsI18n = {
     'usageStats.openAction': 'Статистика',
     'usageStats.title': 'Статистика',
     'usageStats.range.label': 'Период',
+    'usageStats.range.1d': 'Today (не переведено)',
     'usageStats.range.7d': '7 дней',
     'usageStats.range.30d': '30 дней',
     'usageStats.range.90d': '90 дней',
@@ -980,7 +981,6 @@ export const usageStatsI18n = {
     'usageStats.models.byTokens': 'Токены',
     'usageStats.models.byCost': 'Стоимость',
     'usageStats.models.bySteps': 'Шаги',
-
     'usageStats.tokens.title': 'Состав токенов',
     'usageStats.tokens.input': 'Вход',
     'usageStats.tokens.output': 'Выход + рассуждения',

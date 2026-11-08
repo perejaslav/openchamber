@@ -151,5 +151,13 @@ export const tooltipsPanelI18n = {
     'contextTooltips.panel.chooseEffort': '選擇思考強度',
   },
   ru: {
+    'contextTooltips.panel.showFileTree': 'Show file tree (не переведено)',
+    'contextTooltips.panel.hideFileTree': 'Hide file tree (не переведено)',
+    'contextTooltips.panel.showFileEditor': 'Show file editor (не переведено)',
+    'contextTooltips.panel.hideFileEditor': 'Hide file editor (не переведено)',
+    'contextTooltips.panel.releaseSurface': 'Stop controlling the surface (не переведено)',
+    'contextTooltips.panel.reconnectSurface': 'Reconnect to the surface (не переведено)',
+    'contextTooltips.panel.chooseWalkthroughModel': 'Choose the model for this walkthrough (не переведено)',
+    'contextTooltips.panel.chooseEffort': 'Choose thinking effort (не переведено)',
   },
 };

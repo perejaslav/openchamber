@@ -76,5 +76,8 @@ export const selectionApprovalI18n = {
     'settings.openchamber.visual.field.selectionApprovalTextInfo': '選取助手文字後，贊同快捷操作使用的自訂回饋。留空使用預設文案。',
   },
   ru: {
+    'chat.textSelection.title.approveSelection': 'Approve selection (не переведено)',
+    'settings.openchamber.visual.field.selectionApprovalText': 'Selection approval text (не переведено)',
+    'settings.openchamber.visual.field.selectionApprovalTextInfo': 'Custom feedback for the approval shortcut on selected assistant text. Leave empty to use the default. (не переведено)',
   },
 };

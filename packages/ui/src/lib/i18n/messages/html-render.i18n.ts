@@ -312,6 +312,8 @@ export const htmlRenderI18n = {
     'chat.htmlRender.chatSentEarlier': 'Вы уже писали в чате до этой страницы',
     'chat.htmlRender.unanswered': 'Без ответа',
     'chat.htmlRender.notDrawn': 'Sent back to the agent to fix (не переведено)',
+    'chat.htmlRender.decline': 'Decline (не переведено)',
+    'chat.htmlRender.declined': 'Declined (не переведено)',
     'chat.htmlRender.answerFailed': 'Не удалось отправить ответ',
     'settings.openchamber.tools.field.agentRenderTool': 'Инструмент отображения для агентов',
     'settings.openchamber.tools.field.agentRenderToolAria': 'Инструмент отображения для агентов',

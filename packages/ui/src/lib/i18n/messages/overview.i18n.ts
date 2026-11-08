@@ -1146,6 +1146,7 @@ export const overviewI18n = {
     'overview.activity.running': 'работает',
     'overview.activity.subagent': 'субагент',
     'overview.activity.shell': 'фоновая команда',
+    'overview.activity.image': 'generating image (не переведено)',
     'overview.signal.merged': 'PR слит',
     'overview.signal.issueClosed': 'задача закрыта',
     'overview.signal.issueDropped': 'задача снята',

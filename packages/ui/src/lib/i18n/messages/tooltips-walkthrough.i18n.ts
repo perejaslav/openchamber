@@ -136,5 +136,12 @@ export const tooltipsWalkthroughI18n = {
     'contextTooltips.walkthrough.checkAgain': '重新檢查',
   },
   ru: {
+    'contextTooltips.walkthrough.generate': 'Explain these changes step by step (не переведено)',
+    'contextTooltips.walkthrough.regenerate': 'Generate a fresh walkthrough (не переведено)',
+    'contextTooltips.walkthrough.stop': 'Stop generating the walkthrough (не переведено)',
+    'contextTooltips.walkthrough.generateRequested': 'Generate for this language and model (не переведено)',
+    'contextTooltips.walkthrough.regenerateStale': 'Generate again for the current code (не переведено)',
+    'contextTooltips.walkthrough.openChanges': 'Open all changes (не переведено)',
+    'contextTooltips.walkthrough.checkAgain': 'Check again (не переведено)',
   },
 };
