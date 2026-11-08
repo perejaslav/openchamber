@@ -37,6 +37,9 @@ OpenChamber хранит их в `.openchamber/project.json` в корне ре�
     "bun install"
   ],
   "setupWorktreeWait": true,
+  "teardownWorktree": [
+    "docker compose down"
+  ],
   "projectActions": [
     {
       "id": "dev",
@@ -63,7 +66,9 @@ OpenChamber хранит их в `.openchamber/project.json` в корне ре�
 
 `setupWorktree` — это список shell-команд, которые OpenChamber выполняет внутри нового worktree сразу после его создания, по порядку. Используйте `$ROOT_PROJECT_PATH` для пути к основному checkout. `setupWorktreeWait: true` заставляет OpenChamber дождаться этих команд, прежде чем запускать сессию в worktree.
 
-`projectActions` — это список действий в меню заголовка. `id`, `name` и `command` обязательны. `icon` необязательна и по умолчанию берёт значок play; OpenChamber знает такие имена: `play`, `build`, `lint`, `terminal`, `tools`, `bug`, `flask`, `rocket`, `code`, `server`, `branch`, `search`, `settings`, `brain`, `stack`, `robot`, `command` и `file`. `autoOpenUrl: true` открывает адрес, который выводит команда, см. [Preview и dev-серверы](/ru/preview/). `platforms` ограничивает действие значениями `macos`, `linux` или `windows`. `runIn: "parent"` выполняет действие в основном checkout, а не в текущем worktree.
+`teardownWorktree` — это список shell-команд, которые OpenChamber выполняет внутри worktree прямо перед его удалением или архивированием, по порядку, например `docker compose down` для стека, который запустил worktree. Если одна из них завершится ошибкой, worktree останется, а OpenChamber покажет ошибку команды. Сначала выполняются команды удаления из репозитория, затем ваши — в том числе когда вы используете только свои команды настройки. Они проходят через тот же вопрос о доверии, что и команды настройки.
+
+`projectActions` — это список действий проекта: тех, которые вы запускаете из «Статуса работы», из диалога действий проекта и из палитры команд. `id`, `name` и `command` обязательны. `icon` необязательна и по умолчанию берёт значок play; OpenChamber знает такие имена: `play`, `build`, `lint`, `terminal`, `tools`, `bug`, `flask`, `rocket`, `code`, `server`, `branch`, `search`, `settings`, `brain`, `stack`, `robot`, `command` и `file`. `autoOpenUrl: true` открывает адрес, который выводит команда, см. [Preview и dev-серверы](/ru/preview/). `platforms` ограничивает действие значениями `macos`, `linux` или `windows`. `runIn: "parent"` выполняет действие в основном checkout, а не в текущем worktree.
 
 `draftStarters` закрепляет команды и навыки на экране новой сессии. Каждая запись имеет вид `{ "type": "command" | "skill", "name": "..." }`, а сама команда или навык должны существовать в конфиге OpenCode этого репозитория.
 
