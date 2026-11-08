@@ -4,6 +4,7 @@ import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { firstPartyIntegrationsI18n } from './first-party-integrations.i18n';
 import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
+import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
   'settings.themeImport.selectAll': 'Выбрать все',
   'settings.themeImport.deselectAll': 'Снять выделение',
@@ -2656,6 +2657,7 @@ export const settingsDict = {
   ...extensionsSettingsI18n.ru,
   ...settingsLayoutI18n.ru,
   ...firstPartyIntegrationsI18n.ru,
+  ...extensionPowersI18n.ru,
   'settings.page.integrations.title': 'Интеграции',
   'settings.page.integrations.description': 'Подключите сервисы и подписки, с которыми работает OpenChamber.',
   'settings.agents.page.field.steps': 'Максимум шагов',

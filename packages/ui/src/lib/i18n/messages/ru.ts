@@ -25,7 +25,11 @@ import { compactionSettingsI18n } from './compaction-settings.i18n';
 import { heapSnapshotI18n } from './heap-snapshot.i18n';
 import { consoleBudgetsI18n } from './console-budgets.i18n';
 import { imageToolI18n } from './image-tool.i18n';
+import { usageToolI18n } from './usage-tool.i18n';
+import { openchamberToolOutputI18n } from './openchamber-tool-output.i18n';
+import { opencodeToolOutputI18n } from './opencode-tool-output.i18n';
 import { agentStatusI18n } from './agent-status.i18n';
+import { selectionApprovalI18n } from './selection-approval.i18n';
 import { snippetsI18n } from './snippets.i18n';
 import { sidebarWorkI18n } from './sidebar-work.i18n';
 import { sidebarSectionsI18n } from './sidebar-sections.i18n';
@@ -49,6 +53,15 @@ import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
 import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
+import { tooltipsDiffI18n } from './tooltips-diff.i18n';
+import { tooltipsFilesI18n } from './tooltips-files.i18n';
+import { tooltipsGitI18n } from './tooltips-git.i18n';
+import { tooltipsTrackerI18n } from './tooltips-tracker.i18n';
+import { tooltipsWalkthroughI18n } from './tooltips-walkthrough.i18n';
+import { tooltipsTerminalBrowserI18n } from './tooltips-terminal-browser.i18n';
+import { tooltipsWorkspaceI18n } from './tooltips-workspace.i18n';
+import { tooltipsPanelI18n } from './tooltips-panel.i18n';
+import { tooltipsChatI18n } from './tooltips-chat.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode входит в состав OpenChamber. Обновите OpenChamber, чтобы получить OpenCode v2.",
@@ -717,7 +730,11 @@ export const dict: Record<I18nKey, string> = {
   ...heapSnapshotI18n.ru,
   ...consoleBudgetsI18n.ru,
   ...imageToolI18n.ru,
+  ...usageToolI18n.ru,
+  ...openchamberToolOutputI18n.ru,
+  ...opencodeToolOutputI18n.ru,
   ...agentStatusI18n.ru,
+  ...selectionApprovalI18n.ru,
   ...snippetsI18n.ru,
   ...sidebarWorkI18n.ru,
   ...sidebarSectionsI18n.ru,
@@ -741,6 +758,15 @@ export const dict: Record<I18nKey, string> = {
   ...workflowsI18n.ru,
   ...sessionReferencesI18n.ru,
   ...guestStatusViewI18n.ru,
+  ...tooltipsDiffI18n.ru,
+  ...tooltipsFilesI18n.ru,
+  ...tooltipsGitI18n.ru,
+  ...tooltipsTrackerI18n.ru,
+  ...tooltipsWalkthroughI18n.ru,
+  ...tooltipsTerminalBrowserI18n.ru,
+  ...tooltipsWorkspaceI18n.ru,
+  ...tooltipsPanelI18n.ru,
+  ...tooltipsChatI18n.ru,
   'terminalView.actions.attachSelection': 'Прикрепить выделенный вывод',
   'terminalView.actions.copySelection': 'Копировать выделенный вывод',
   'terminalView.toast.selectionCopied': 'Вывод скопирован',
