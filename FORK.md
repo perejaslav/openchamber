@@ -21,8 +21,8 @@
 
 | Что | Где | Объём |
 |---|---|---|
-| Интерфейс приложения | `packages/ui/src/lib/i18n/messages/` | 6628 ключей, 48 файлов |
-| Сайт документации | `packages/docs/content/docs/ru/` | 57 страниц |
+| Интерфейс приложения | `packages/ui/src/lib/i18n/messages/` | 9722 ключа, 101 файл |
+| Сайт документации | `packages/docs/content/docs/ru/` | 58 страниц |
 | Боковое меню документации | `packages/docs/sidebar.config.json` | 65 подписей |
 | Пользовательские доки репозитория | `README.md`, `docs/CUSTOM_THEMES.md`, `SECURITY.md` | 3 файла |
 | Русский по умолчанию | `packages/ui/src/lib/i18n/runtime.ts` | `DEFAULT_LOCALE = 'ru'` |
@@ -269,7 +269,7 @@ gh workflow list -R perejaslav/openchamber --all
 
 ## Автосинхронизация с апстримом
 
-Ветка `ru` обновляется сама: `.github/workflows/ru-upstream-sync.yml` раз в 6 часов
+Ветка `ru` обновляется сама: `.github/workflows/ru-upstream-sync.yml` раз в 12 часов
 проверяет, не вышел ли новый релиз апстрима, и если вышел — доводит дело до релиза
 `ru-v<версия>.<n>` без участия человека.
 
@@ -307,7 +307,7 @@ gh workflow list -R perejaslav/openchamber --all
 
 Апстрим добавляет новые локали (v2.0.4 принёс нидерландский), а форк добавляет
 русский **в те же места**: тип `Locale` и массив `LOCALES` в `runtime.ts`, ключ
-`common.language.*` в каждом словаре, блок локали в 17 модульных `*.i18n.ts`,
+`common.language.*` в каждом словаре, блок локали в каждом модульном `*.i18n.ts`,
 массивы локалей в модульных тестах. Git видит две правки одних и тех же строк и
 останавливается — на каждом релизе.
 

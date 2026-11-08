@@ -221,7 +221,7 @@ export const mcpGridI18n = {
     'settings.mcp.grid.status.pending': 'Подключение',
     'settings.mcp.grid.status.blockedByPolicy': 'Заблокировано политикой',
     'settings.mcp.grid.scope.project': 'Проект',
-    'settings.mcp.grid.runtimeProvided': 'Provided by OpenCode (не переведено)',
+    'settings.mcp.grid.runtimeProvided': 'Предоставляется OpenCode',
     'settings.mcp.page.back': 'Все серверы',
   },
 } as const;
