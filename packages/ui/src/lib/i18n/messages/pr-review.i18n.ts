@@ -557,7 +557,7 @@ export const prReviewI18n = {
     'review.submit.buttonWithCount': 'Ревью · {count}',
     'review.submit.placeholder': 'Добавьте итог ревью (необязательно)',
     'review.submit.send.one': 'Отправить комментарий',
-    'review.submit.send.other': 'Отправить комментариев: {count}',
+    'review.submit.send.other': 'Отправить комментарии: {count}',
     'review.submit.hint.one': 'Этот комментарий видите только вы, пока не отправите его.',
     'review.submit.hint.other': 'Эти комментарии видите только вы, пока не отправите их.',
     'review.submit.readFailed': "Не удалось прочитать это ревью. Показанное может быть устаревшим.",

@@ -21,7 +21,7 @@
 
 | Что | Где | Объём |
 |---|---|---|
-| Интерфейс приложения | `packages/ui/src/lib/i18n/messages/` | 9722 ключа, 101 файл |
+| Интерфейс приложения | `packages/ui/src/lib/i18n/messages/` | 9740 ключей, 101 файл |
 | Сайт документации | `packages/docs/content/docs/ru/` | 58 страниц |
 | Боковое меню документации | `packages/docs/sidebar.config.json` | 65 подписей |
 | Пользовательские доки репозитория | `README.md`, `docs/CUSTOM_THEMES.md`, `SECURITY.md` | 3 файла |
