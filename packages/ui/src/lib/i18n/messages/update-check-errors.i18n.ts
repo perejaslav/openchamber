@@ -76,8 +76,8 @@ export const updateCheckErrorsI18n = {
     'updateDialog.error.checkFailed': 'לא ניתן לבדוק עדכונים: {detail}',
   },
   ru: {
-    'updateDialog.error.checkServerError': "GitHub didn't send the update files (HTTP {status}). The problem is on GitHub's side; check again in a few minutes. (не переведено)",
-    'updateDialog.error.checkOffline': "Couldn't reach GitHub to check for updates. Check your internet connection and try again. (не переведено)",
-    'updateDialog.error.checkFailed': "Couldn't check for updates: {detail} (не переведено)",
+    'updateDialog.error.checkServerError': "GitHub не прислал файлы обновления (HTTP {status}). Проблема на стороне GitHub; проверьте снова через несколько минут.",
+    'updateDialog.error.checkOffline': "Не удалось связаться с GitHub, чтобы проверить обновления. Проверьте подключение к интернету и повторите.",
+    'updateDialog.error.checkFailed': "Не удалось проверить обновления: {detail}",
   },
 } as const;

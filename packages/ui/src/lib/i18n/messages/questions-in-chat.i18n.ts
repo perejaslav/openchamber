@@ -106,10 +106,10 @@ export const questionsInChatI18n = {
     'chat.formDock.showInChatAria': 'عرض السؤال في المحادثة',
   },
   ru: {
-    'settings.openchamber.visual.field.questionsPlacement': 'Questions (не переведено)',
-    'settings.openchamber.visual.field.questionsPlacementInfo': 'Where an agent\'s question appears: in a pop-up above the message box, or as a card in the chat after the agent\'s message. Applies to this device. (не переведено)',
-    'settings.openchamber.visual.option.questionsPlacement.popup.label': 'Pop-up (не переведено)',
-    'settings.openchamber.visual.option.questionsPlacement.chat.label': 'In the chat (не переведено)',
-    'chat.formDock.showInChatAria': 'Show the question in the chat (не переведено)',
+    'settings.openchamber.visual.field.questionsPlacement': 'Вопросы',
+    'settings.openchamber.visual.field.questionsPlacementInfo': 'Где появляется вопрос агента: во всплывающем окне над полем ввода или карточкой в чате после сообщения агента. Действует на этом устройстве.',
+    'settings.openchamber.visual.option.questionsPlacement.popup.label': 'Всплывающее окно',
+    'settings.openchamber.visual.option.questionsPlacement.chat.label': 'В чате',
+    'chat.formDock.showInChatAria': 'Показать вопрос в чате',
   },
 } as const;

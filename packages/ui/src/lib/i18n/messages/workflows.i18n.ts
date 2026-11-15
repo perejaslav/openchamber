@@ -1188,7 +1188,7 @@ export const workflowsI18n = {
     'chat.workStatus.workflow.openAgent': 'Открыть агента {name}',
     'settings.openchamber.tools.field.agentWorkflowTool': 'Инструмент воркфлоу',
     'settings.openchamber.tools.field.agentWorkflowToolAria': 'Инструмент воркфлоу',
-    'settings.openchamber.tools.field.agentWorkflowToolSummary': 'Распределять большие задачи между многими агентами в фоне.',
+    'settings.openchamber.tools.field.agentWorkflowToolSummary': 'Распределять большие задачи между многими агентами в фоне после вашего одобрения каждого запуска.',
     'contextPanel.mode.workflows': 'Воркфлоу',
     'contextRail.surface.workflows.description': "Запуски воркфлоу этой сессии: агенты, журнал и результат",
     'workflows.panel.runPicker': 'Запуск воркфлоу',

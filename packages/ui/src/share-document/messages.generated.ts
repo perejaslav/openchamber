@@ -4,10 +4,10 @@ import type { Locale } from '@/lib/i18n/runtime';
 
 export const SHARE_DOCUMENT_MESSAGES: Record<Locale, Record<string, string>> = {
   "ru": {
-    "chat.chatInput.toast.guestNotOnPhone": "{name} does not open on the phone. Open it in OpenChamber on the web or desktop. (не переведено)",
-    "chat.guestLink.attach": "Attach {identifier} from {name} (не переведено)",
-    "chat.guestLink.noProject": "Open a project to see this in {name}. (не переведено)",
-    "chat.guestLink.open": "Open {identifier} in {name} (не переведено)",
+    "chat.chatInput.toast.guestNotOnPhone": "{name} не открывается на телефоне. Откройте в OpenChamber в вебе или на десктопе.",
+    "chat.guestLink.attach": "Прикрепить {identifier} из {name}",
+    "chat.guestLink.noProject": "Откройте проект, чтобы увидеть это в {name}.",
+    "chat.guestLink.open": "Открыть {identifier} в {name}",
     "chat.markdown.alert.caution": "Осторожно",
     "chat.markdown.alert.important": "Важно",
     "chat.markdown.alert.note": "Примечание",

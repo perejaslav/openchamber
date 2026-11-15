@@ -91,9 +91,9 @@ export const markdownOutlineI18n = {
     'filesView.preview.outline.noMatches': 'אין כותרות תואמות',
   },
   ru: {
-    'filesView.preview.outline.label': 'Outline (не переведено)',
-    'filesView.preview.outline.placeholder': 'Go to heading… (не переведено)',
-    'filesView.preview.outline.noHeadings': 'No headings in this document (не переведено)',
-    'filesView.preview.outline.noMatches': 'No matching headings (не переведено)',
+    'filesView.preview.outline.label': 'Структура',
+    'filesView.preview.outline.placeholder': 'Перейти к заголовку…',
+    'filesView.preview.outline.noHeadings': 'В этом документе нет заголовков',
+    'filesView.preview.outline.noMatches': 'Нет подходящих заголовков',
   },
 };

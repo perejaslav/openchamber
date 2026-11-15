@@ -1256,7 +1256,7 @@ export const providersI18n = {
     'settings.openchamber.defaults.field.fallbackThinking': 'Рассуждения резервной модели',
     'settings.openchamber.defaults.newSessionsTitle': 'Новые сессии',
     'settings.openchamber.defaults.field.model': 'Модель',
-    'settings.openchamber.defaults.field.modelUnavailable': 'This model isn\'t available anymore, so new sessions use another model. (не переведено)',
+    'settings.openchamber.defaults.field.modelUnavailable': 'Эта модель больше недоступна, поэтому новые сессии используют другую модель.',
     'settings.openchamber.defaults.field.agent': 'Агент',
     'settings.openchamber.defaults.promptCacheTitle': 'Кэш промптов',
     'settings.openchamber.defaults.usageLimitsTitle': 'Лимиты использования',

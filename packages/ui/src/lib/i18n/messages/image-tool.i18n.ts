@@ -197,7 +197,7 @@ export const imageToolI18n = {
   },
   ru: {
     'settings.openchamber.tools.field.agentImageTool': 'Инструмент изображений для агентов',
-    'settings.openchamber.tools.field.agentImageToolSummary': 'Агенты создают и правят изображения выбранной вами моделью.',
+    'settings.openchamber.tools.field.agentImageToolSummary': 'Позволяет агентам создавать и править изображения выбранной вами моделью; оплата идёт через её провайдера.',
     'settings.openchamber.tools.field.agentImageToolAria': 'Включить инструмент изображений для агентов',
     'settings.openchamber.tools.imageModel.label': 'Модель изображений',
     'settings.openchamber.tools.imageModel.aria': 'Модель изображений',

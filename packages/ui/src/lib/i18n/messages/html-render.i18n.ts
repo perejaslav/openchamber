@@ -314,10 +314,10 @@ export const htmlRenderI18n = {
     'chat.htmlRender.notDrawn': 'Возвращено агенту на исправление',
     'chat.htmlRender.decline': 'Отклонить',
     'chat.htmlRender.declined': 'Отклонено',
-    'chat.htmlRender.undelivered': 'not delivered to the agent yet (не переведено)',
+    'chat.htmlRender.undelivered': 'ещё не доставлено агенту',
     'chat.htmlRender.answerFailed': 'Не удалось отправить ответ',
     'settings.openchamber.tools.field.agentRenderTool': 'Инструмент отображения для агентов',
     'settings.openchamber.tools.field.agentRenderToolAria': 'Инструмент отображения для агентов',
-    'settings.openchamber.tools.field.agentRenderToolSummary': 'Позволяет агентам показывать графики, таблицы, диаграммы и макеты интерфейса прямо в чате и предлагать вам выбрать вариант там же.',
+    'settings.openchamber.tools.field.agentRenderToolSummary': 'Позволяет агентам показывать графики, таблицы, диаграммы и макеты интерфейса в чате, изолированно от ваших файлов, и предлагать вам выбрать вариант там же.',
   },
 } as const;

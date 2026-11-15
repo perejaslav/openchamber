@@ -364,8 +364,8 @@ export const sessionNoticesI18n = {
     'chat.sessionNotice.pullRequest.behind': 'Отстаёт от базовой ветки',
     'chat.sessionNotice.pullRequest.activity': 'Новый комментарий или ревью',
     'chat.sessionNotice.pullRequest.activityNames': 'Новый комментарий или ревью от {names}',
-    'chat.sessionNotice.pageAnswer.answered': 'Answer to {title}: {summary} (не переведено)',
-    'chat.sessionNotice.pageAnswer.declined': 'You declined {title} (не переведено)',
-    'chat.sessionNotice.pageAnswer.notDrawn': 'Could not draw {title} (не переведено)',
+    'chat.sessionNotice.pageAnswer.answered': 'Ответ на {title}: {summary}',
+    'chat.sessionNotice.pageAnswer.declined': 'Вы отклонили {title}',
+    'chat.sessionNotice.pageAnswer.notDrawn': 'Не удалось нарисовать {title}',
   },
 } as const;
