@@ -16,8 +16,12 @@ import { htmlRenderI18n } from './html-render.i18n';
 import { documentToolbarI18n } from './document-toolbar.i18n';
 import { uiBlocksI18n } from './ui-blocks.i18n';
 import { updateDialogCanaryI18n } from './update-dialog-canary.i18n';
+import { aboutReleaseNotesI18n } from './about-release-notes.i18n';
+import { updateCheckErrorsI18n } from './update-check-errors.i18n';
 import { secretRequestI18n } from './secret-request.i18n';
+import { questionsInChatI18n } from './questions-in-chat.i18n';
 import { sessionNoticesI18n } from './session-notices.i18n';
+import { settingsHintsI18n } from './settings-hints.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { sessionWarmingI18n } from './session-warming.i18n';
@@ -25,15 +29,21 @@ import { compactionSettingsI18n } from './compaction-settings.i18n';
 import { heapSnapshotI18n } from './heap-snapshot.i18n';
 import { consoleBudgetsI18n } from './console-budgets.i18n';
 import { imageToolI18n } from './image-tool.i18n';
+import { sharePagesI18n } from './share-pages.i18n';
+import { receivedPagesI18n } from './received-pages.i18n';
+import { memoryDreamingI18n } from './memory-dreaming.i18n';
 import { usageToolI18n } from './usage-tool.i18n';
+import { openchamberToolsLayoutI18n } from './openchamber-tools-layout.i18n';
 import { openchamberToolOutputI18n } from './openchamber-tool-output.i18n';
 import { opencodeToolOutputI18n } from './opencode-tool-output.i18n';
 import { agentStatusI18n } from './agent-status.i18n';
+import { androidWidgetsI18n } from './android-widgets.i18n';
 import { selectionApprovalI18n } from './selection-approval.i18n';
 import { snippetsI18n } from './snippets.i18n';
 import { sidebarWorkI18n } from './sidebar-work.i18n';
 import { sidebarSectionsI18n } from './sidebar-sections.i18n';
 import { worktreeArchiveI18n } from './worktree-archive.i18n';
+import { omniSearchI18n } from './omni-search.i18n';
 import { overviewI18n } from './overview.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
@@ -48,6 +58,7 @@ import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
 import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 import { diffFindI18n } from './diff-find.i18n';
+import { markdownOutlineI18n } from './markdown-outline.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
@@ -194,8 +205,6 @@ export const dict: Record<I18nKey, string> = {
   'sessions.scheduledTasks.editor.targetRequired': 'Выберите целевую сессию.',
   'sessions.sidebar.header.displayMode.showWork': 'Показывать в разделе «В работе»',
   'sessions.sidebar.footer.actions.updateApp': 'Обновить приложение',
-  'sessions.sidebar.empty.noMatches.searchArchive': 'Поиск по архиву',
-  'sessions.sidebar.session.menu.openInMiniChat': 'Открыть в Mini Chat',
   'chat.work.reviewHint.text': 'Изменения готовы к просмотру.',
   'chat.work.reviewHint.aiReview': 'ИИ-ревью',
   'chat.backgroundShells.aria': 'Фоновые команды',
@@ -404,21 +413,7 @@ export const dict: Record<I18nKey, string> = {
   'commandPalette.group.messages': 'Сообщения',
   'commandPalette.messages.showAll': 'Показать все результаты по сообщениям',
   'commandPalette.messages.placeholder': 'Поиск по сообщениям…',
-  'commandPalette.messages.back': 'Назад',
-  'commandPalette.messages.filter.scopeLabel': 'Где',
-  'commandPalette.messages.filter.allProjects': 'Все проекты',
-  'commandPalette.messages.filter.thisProject': 'Этот проект',
-  'commandPalette.messages.filter.authorLabel': 'Автор',
-  'commandPalette.messages.filter.anyone': 'Любой',
-  'commandPalette.messages.filter.you': 'Вы',
-  'commandPalette.messages.filter.agent': 'Агент',
-  'commandPalette.messages.filter.reasoning': 'Рассуждения',
   'commandPalette.messages.inReasoning': 'Рассуждения',
-  'commandPalette.messages.tooShort': 'Введите не менее 3 символов для поиска по сообщениям',
-  'commandPalette.messages.searching': 'Поиск по сообщениям…',
-  'commandPalette.messages.error': 'Не удалось выполнить поиск по сообщениям',
-  'commandPalette.messages.unavailable': 'Поиск по сообщениям недоступен на этом сервере',
-  'commandPalette.messages.empty': 'Сообщения не найдены',
   'commandPalette.messages.indexing': 'Индексация старых диалогов: {done} из {total}.',
   'commandPalette.messages.loadMore': 'Загрузить ещё',
   'commandPalette.messages.byYou': 'Ваше сообщение',
@@ -741,6 +736,53 @@ export const dict: Record<I18nKey, string> = {
   'chat.fileOpenRequest.toast.description': 'Показано в сессии {session}',
   'chat.fileOpenRequest.toast.descriptionUntitled': 'Показано в другой сессии',
   'chat.fileOpenRequest.toast.openSession': 'Открыть сессию',
+  'sessions.sidebar.empty.noProjects.title': 'No projects yet (не переведено)',
+  'sessions.sidebar.empty.noProjects.description': 'Add a project to start coding. (не переведено)',
+  'sessions.sidebar.project.actions.copyPath': 'Copy path (не переведено)',
+  'sessions.sidebar.project.copyPath.success': 'Project path copied (не переведено)',
+  'sessions.sidebar.project.copyPath.error': 'Failed to copy the project path (не переведено)',
+  'sessions.sidebar.session.status.waitingOnExtension': 'Waiting on a timer or an extension (не переведено)',
+  'worktree.bootstrap.toast.branchNameConflict': 'The branch name clashes with an existing branch: the same name, or one nested inside the other. Rename the branch and create the worktree again. (не переведено)',
+  'contextPanel.browser.device.scheme': "Page appearance (не переведено)",
+  'contextUsage.compacted.short': 'Compacted. Updates after the next response. (не переведено)',
+  'diffView.change.renamedFrom': 'Renamed from {from} — content unchanged (не переведено)',
+  'chat.prWatch.count': 'Waiting on pull requests: {count} (не переведено)',
+  'chat.prWatch.mr.count': 'Waiting on merge requests: {count} (не переведено)',
+  'chat.prWatch.change.count': 'Waiting on changes: {count} (не переведено)',
+  'chat.prWatch.actions.stopAll': 'Stop all (не переведено)',
+  'chat.extensionWait.title': 'Waiting on {title} (не переведено)',
+  'chat.extensionWait.status.waking': 'waking the agent (не переведено)',
+  'chat.extensionWait.actions.stop': 'Stop waiting (не переведено)',
+  'chat.extensionWait.toast.stopFailed': 'Could not reach the server to stop waiting. Try again. (не переведено)',
+  'directoryExplorerDialog.browse.linkTarget': 'Link to {path} (не переведено)',
+  'session.newWorktree.creatingWithCommand': 'Running your create command… (не переведено)',
+  'chat.fileAttachment.toast.heicConversionFailed': '{name} could not be converted from HEIC to JPEG, so it was not attached. Save the photo as JPEG and attach it again. (не переведено)',
+  'chat.draftStarters.sectionPinned': 'Your starters (не переведено)',
+  'chat.draftStarters.moveToFront': 'Move to the front (не переведено)',
+  'chat.toast.shareAnswer.openSession': 'Open session (не переведено)',
+  'sessions.sidebar.group.empty.trustPaused': 'Agents are paused until you trust this folder. (не переведено)',
+  'sessions.sidebar.group.empty.reviewTrust': 'Review and trust (не переведено)',
+  'chat.chatInput.draftPicker.addProject': 'Add project… (не переведено)',
+  'chat.modelControls.modelUnavailable': 'Model "{model}" isn\'t available anymore. Its provider was removed or switched off. Pick another model. (не переведено)',
+  'projects.opencodeTrust.kind.env': 'Environment variable {name} (не переведено)',
+  'projects.opencodeTrust.kind.file': 'File {path} (не переведено)',
+  'projects.opencodeTrust.values': 'Values from your machine it can send out (не переведено)',
+  'projects.opencodeTrust.permissions': 'Permissions it allows (не переведено)',
+  'projects.opencodeTrust.permission.agent': 'Agent {name} (не переведено)',
+  'projects.opencodeTrust.permission.everyAgent': 'Every agent (не переведено)',
+  'vscodeLayout.actions.showSessionsAria': 'Show sessions (не переведено)',
+  'vscodeLayout.actions.hideSessionsAria': 'Hide sessions (не переведено)',
+  'updateDialog.openCodeTooOld': 'OpenChamber {version} needs OpenCode {required}. This server has {current}. Update OpenCode first. (не переведено)',
+  'chat.workStatus.telemetry.firstOutput': 'Average first output',
+  'chat.workStatus.telemetry.firstOutputDescription': 'Average wait from the start of each model step until the model sends anything: text, reasoning or a tool call. Unlike TTFT, steps that open with a tool call count too. Hidden for steps from OpenCode older than 2.3.0. (не переведено)',
+  'chat.workStatus.breakdown.planCountSingle': '{count} plan (не переведено)',
+  'chat.workStatus.breakdown.planCountPlural': '{count} plans (не переведено)',
+  'chat.workStatus.linkedPlans.open': 'Open plan {title} (не переведено)',
+  'chat.formCard.connectionLost': 'Connection to the server was lost. Nothing was sent; try again once it reconnects. (не переведено)',
+  'chat.formCard.connectionLostReason': 'Connection to the server was lost ({reason}). Nothing was sent; try again once it reconnects. (не переведено)',
+  'chat.formCard.notConnected': 'Not connected to the server yet. Nothing was sent; try again once it connects. (не переведено)',
+  'chat.trustPaused.text': 'Agents can\'t work in {name} until you trust its plugins and commands. (не переведено)',
+  'chat.trustPaused.action': 'Review and trust (не переведено)',
   ...settingsDict,
   ...linearIssuePickerI18n.ru,
   ...referencePickerI18n.ru,
@@ -758,8 +800,12 @@ export const dict: Record<I18nKey, string> = {
   ...documentToolbarI18n.ru,
   ...uiBlocksI18n.ru,
   ...updateDialogCanaryI18n.ru,
+  ...aboutReleaseNotesI18n.ru,
+  ...updateCheckErrorsI18n.ru,
   ...secretRequestI18n.ru,
+  ...questionsInChatI18n.ru,
   ...sessionNoticesI18n.ru,
+  ...settingsHintsI18n.ru,
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...sessionWarmingI18n.ru,
@@ -767,15 +813,21 @@ export const dict: Record<I18nKey, string> = {
   ...heapSnapshotI18n.ru,
   ...consoleBudgetsI18n.ru,
   ...imageToolI18n.ru,
+  ...sharePagesI18n.ru,
+  ...receivedPagesI18n.ru,
+  ...memoryDreamingI18n.ru,
   ...usageToolI18n.ru,
+  ...openchamberToolsLayoutI18n.ru,
   ...openchamberToolOutputI18n.ru,
   ...opencodeToolOutputI18n.ru,
   ...agentStatusI18n.ru,
+  ...androidWidgetsI18n.ru,
   ...selectionApprovalI18n.ru,
   ...snippetsI18n.ru,
   ...sidebarWorkI18n.ru,
   ...sidebarSectionsI18n.ru,
   ...worktreeArchiveI18n.ru,
+  ...omniSearchI18n.ru,
   ...overviewI18n.ru,
   ...isolatedSpacesI18n.ru,
   ...sourceBoardI18n.ru,
@@ -790,6 +842,7 @@ export const dict: Record<I18nKey, string> = {
   ...pluginsGridI18n.ru,
   ...integrationsCatalogI18n.ru,
   ...diffFindI18n.ru,
+  ...markdownOutlineI18n.ru,
   ...markdownGithubI18n.ru,
   ...autocompleteScopeI18n.ru,
   ...workflowsI18n.ru,
@@ -1190,7 +1243,6 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.header.projectSort.recent': 'Недавние',
   'sessions.sidebar.header.search.matchCountSingle': '{count} совпадение',
   'sessions.sidebar.header.search.matchCountPlural': '{count} совпадений',
-  'sessions.sidebar.header.search.escapeHint': 'Esc — очистить',
   'sessions.sidebar.header.search.placeholder': 'Поиск сессий...',
   'sessions.sidebar.header.search.clear': 'Очистить поиск',
   'sessions.sidebar.footer.actions.settings': 'Настройки',
@@ -1287,8 +1339,6 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.menu.copyLink': 'Копировать ссылку',
   'sessions.sidebar.session.menu.unshare': 'Отменить публикацию',
   'sessions.sidebar.session.menu.exportMarkdown': 'Экспорт Markdown',
-  'sessions.sidebar.session.menu.moveToWorktree': 'Переместить в новый worktree',
-  'sessions.sidebar.session.menu.moveToWorktreeTargets': 'Переместить в worktree',
   'sessions.sidebar.session.menu.newWorktree': 'Новый worktree...',
   'sessions.sidebar.session.moveToWorktree.success': 'Сессия перемещена в новый worktree',
   'sessions.sidebar.session.moveToWorktree.failed': 'Не удалось переместить сессию в новый worktree',
@@ -1298,7 +1348,6 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.moveToWorktree.current': 'Текущий worktree',
   'sessions.sidebar.session.moveToWorktree.existingSuccess': 'Сессия перемещена в worktree',
   'sessions.sidebar.session.moveToWorktree.existingFailed': 'Не удалось переместить сессию в worktree',
-  'sessions.sidebar.session.moveToWorktree.tooltip': 'Создаёт новый worktree из текущей ветки и перемещает туда эту сессию и её подсессии. Незакоммиченные изменения остаются в исходном worktree.',
   'sessions.sidebar.session.moveToWorktree.tooltipBusy': 'Доступно, когда сессия неактивна. Остановите или дождитесь завершения текущей активности.',
   'sessions.sidebar.session.moveToWorktree.tooltipMoving': 'Эта сессия уже перемещается в новый worktree.',
   'sessions.sidebar.session.menu.openInSidePanel': 'Открыть в боковой панели',
@@ -1992,7 +2041,6 @@ export const dict: Record<I18nKey, string> = {
   'contextPanel.browser.annotate.tool.draw': 'Рисование',
   'contextPanel.browser.annotate.commentPlaceholder': 'Опишите изменение...',
   'contextPanel.browser.annotate.submit': 'Прикрепить',
-  'contextPanel.browser.trustNotice': 'Открытые здесь страницы имеют полный доступ к OpenChamber — это нужно для инспекции и снимков экрана. Открывайте только сайты, которым доверяете: вредоносная страница может прочитать ваши данные или действовать от вашего имени.',
   'contextPanel.tab.closeTabAria': 'Закрыть вкладку {label}',
   'contextPanel.tab.menu.close': 'Закрыть',
   'contextPanel.tab.menu.closeOthers': 'Закрыть остальные',
@@ -2364,8 +2412,6 @@ export const dict: Record<I18nKey, string> = {
   'rightSidebar.contextNotesTodo.todo.addAria': 'Добавить задачу',
   'rightSidebar.contextNotesTodo.todo.empty': 'Задач пока нет. Добавьте небольшой список задач для этого проекта.',
   'rightSidebar.contextNotesTodo.todo.actions.markComplete': 'Отметить «{text}» как выполненную',
-  'rightSidebar.contextNotesTodo.todo.actions.collapse': 'Свернуть задачу «{text}»',
-  'rightSidebar.contextNotesTodo.todo.actions.expand': 'Развернуть задачу «{text}»',
   'rightSidebar.contextNotesTodo.todo.actions.send': 'Отправить «{text}»',
   'rightSidebar.contextNotesTodo.todo.actions.reorder': 'Переместить «{text}»',
   'rightSidebar.contextNotesTodo.todo.sendMenu.currentSession': 'Отправить в текущую сессию',
@@ -2816,7 +2862,6 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.empty.loadingSessions': 'Загрузка сессий…',
   'sessions.sidebar.group.empty.loadFailed': 'Не удалось обновить сессии.',
   'sessions.sidebar.group.empty.initializationFailed': 'Не удалось инициализировать рабочую область.',
-  'sessions.search.submitHint': 'Нажмите Enter для поиска',
   'sessions.sidebar.group.empty.retry': 'Попробовать снова',
   'sessions.sidebar.group.empty.permissionDenied': 'Требуется доступ к папке.',
   'sessions.sidebar.group.empty.grantAccess': 'Предоставить доступ',
@@ -3252,17 +3297,6 @@ export const dict: Record<I18nKey, string> = {
   'projectActions.error.invalidCustomUrlFormat': 'Неверный формат пользовательского URL',
   'projectActions.error.selectedDesktopSshForwardUnavailable': 'Выбранное перенаправление SSH настольного приложения недоступно',
   'projectActions.error.failedToRunAction': 'Не удалось выполнить действие',
-  'mcpDropdown.title': 'MCP-серверы',
-  'mcpDropdown.actions.refreshAria': 'Обновить',
-  'mcpDropdown.actions.openAria': 'MCP-серверы',
-  'mcpDropdown.statusAria': 'Статус MCP',
-  'mcpDropdown.status.unknown': 'Неизвестно',
-  'mcpDropdown.status.connected': 'Подключено',
-  'mcpDropdown.status.failed': 'Не удалось: {error}',
-  'mcpDropdown.status.unknownError': 'Неизвестная ошибка',
-  'mcpDropdown.status.needsAuth': 'Требуется аутентификация',
-  'mcpDropdown.status.needsRegistration': 'Требуется регистрация: {error}',
-  'mcpDropdown.empty.configureInConfig': 'Настройте MCP-серверы в настройках.',
   'sessionAuth.error.rateLimitTitle': 'Слишком много попыток',
   'sessionAuth.error.networkTitle': 'Не удалось связаться с сервером',
   'sessionAuth.error.rateLimitDescriptionSingle': 'Подождите {minutes} минуту перед повторной попыткой.',
@@ -3545,16 +3579,6 @@ export const dict: Record<I18nKey, string> = {
   'vscodeLayout.actions.newSessionAria': 'Новая сессия',
   'vscodeLayout.actions.resizeSessionsSidebarAria': 'Изменить ширину панели сессий',
   'vscodeLayout.actions.settingsAria': 'Настройки',
-  'vscodeLayout.quota.title': 'Лимиты запросов',
-  'vscodeLayout.quota.mode.used': 'Использовано',
-  'vscodeLayout.quota.mode.remaining': 'Осталось',
-  'vscodeLayout.quota.lastUpdated': 'Обновлено {time}',
-  'vscodeLayout.quota.noRateLimitsAvailable': 'Лимиты запросов недоступны.',
-  'vscodeLayout.quota.noRateLimitsReported': 'Лимиты запросов не сообщаются.',
-  'vscodeLayout.quota.actions.rateLimitsAria': 'Лимиты запросов',
-  'vscodeLayout.quota.actions.showUsedAria': 'Показать использованную квоту',
-  'vscodeLayout.quota.actions.showRemainingAria': 'Показать оставшуюся квоту',
-  'vscodeLayout.quota.actions.refreshAria': 'Обновить лимиты запросов',
   'updateDialog.header.updateAvailable': 'Доступно обновление',
   'updateDialog.header.updating': 'Обновление OpenChamber...',
   'updateDialog.changelog.title': "Что нового",
@@ -3858,8 +3882,6 @@ export const dict: Record<I18nKey, string> = {
   'chat.compaction.hideSummary': 'Скрыть сводку',
   'chat.revertPopover.staged': 'Откат: {count}',
   'chat.workStatus.mcp.needsAuthHint': 'Войдите в этот MCP-сервер через Настройки → MCP.',
-  'mcpDropdown.toast.authorizeOpenFailed': 'Не удалось открыть страницу авторизации',
-  'mcpDropdown.toast.authorizeFailed': 'Не удалось авторизоваться',
   'header.services.tooltip.currentInstance': 'Текущий экземпляр: {current} ({toggle})',
   'header.workStatusPanel.showOverlay': 'Показать статус работы поверх чата',
   'settings.mcp.page.connection.title': 'Как к нему подключиться',

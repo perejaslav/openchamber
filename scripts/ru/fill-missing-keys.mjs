@@ -103,9 +103,13 @@ const dictRange = (lines, declarationRe) => {
  * the whole sync die with `no "en" block` on a file that plainly has one. Both
  * forms are accepted; `compact` says which one this is, and the rebuild keeps
  * the compact layout when English uses it.
+ *
+ * The locale key itself may be quoted: generated modules such as
+ * `omni-search.i18n.ts` (v2.7.2) write `"en": {`. Both spellings are accepted.
  */
 const localeRange = (lines, locale) => {
-  const start = lines.findIndex((line) => line === `  ${locale}: {`);
+  const label = new RegExp(`^  "?${locale}"?: \\{`);
+  const start = lines.findIndex((line) => label.test(line) && !/\},?\s*$/.test(line));
   if (start >= 0) {
     for (let i = start + 1; i < lines.length; i += 1) {
       if (/^  \},?$/.test(lines[i])) {
@@ -116,7 +120,7 @@ const localeRange = (lines, locale) => {
   }
 
   const compact = lines.findIndex(
-    (line) => line.startsWith(`  ${locale}: {`) && /\},?\s*$/.test(line),
+    (line) => label.test(line) && /\},?\s*$/.test(line),
   );
   if (compact >= 0) {
     return { start: compact, end: compact + 1, blockStart: compact, blockEnd: compact, compact: true };
