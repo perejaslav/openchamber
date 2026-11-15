@@ -18,6 +18,8 @@ import type { Plugin } from 'vite';
  */
 type Bundle = Record<string, { type: 'asset' } | { type: 'chunk'; imports: string[] }>;
 
+const normalizeSlashes = (value: string): string => value.replace(/\\/g, '/');
+
 /** Every chunk `fileName` imports statically, itself included, each once. */
 export const staticImportClosure = (bundle: Bundle, fileName: string): string[] => {
   const seen = new Set<string>();
@@ -54,7 +56,12 @@ export const preloadAppGraph = (options: {
       handler(_html, context) {
         const bundle = context.bundle;
         if (!bundle || !context.chunk || !context.filename.endsWith(`/${options.document}`)) return;
-        const app = Object.values(bundle).find((chunk) => chunk.type === 'chunk' && Object.hasOwn(chunk.modules, options.appModule));
+        // Rollup records module ids with forward slashes; the resolved path on
+        // Windows has backslashes. Compare in one spelling or every Windows
+        // build fails with "no chunk".
+        const wanted = normalizeSlashes(options.appModule);
+        const app = Object.values(bundle).find((chunk) => chunk.type === 'chunk'
+          && Object.keys(chunk.modules).some((id) => normalizeSlashes(id) === wanted));
         if (!app) {
           this.error(`preloadAppGraph: no chunk for ${options.appModule}`);
         }
