@@ -334,6 +334,7 @@ const state = {
   sshLogs: new Map(),
   trayController: null,
   trayFocusListener: null,
+  lastTraySnapshot: null,
   lastFocusedWindowId: null,
   keepAwakeBlockerId: null,
 };
@@ -2107,7 +2108,7 @@ let appMenuLocale = 'en';
 const menuKey = (id, fallback) => menuAccelerator(menuShortcuts, id, fallback);
 
 const applyApplicationMenu = () => {
-  Menu.setApplicationMenu(process.platform === 'darwin' ? buildMacMenu(appMenuLocale) : buildAutoHiddenMenu());
+  Menu.setApplicationMenu(process.platform === 'darwin' ? buildMacMenu(appMenuLocale) : buildAutoHiddenMenu(appMenuLocale));
 };
 
 const getMenuTargetWindow = () => {
@@ -4294,9 +4295,10 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       return null;
 
     case 'desktop_tray_update':
+      state.lastTraySnapshot = args && typeof args === 'object' ? args : { sessions: [], approvals: [] };
       if (state.trayController) {
         try {
-          state.trayController.update(args || {});
+          state.trayController.update(state.lastTraySnapshot, normalizeMenuLocale(readPreferredLocale()));
         } catch (error) {
           log.warn('[electron] tray update failed', error);
         }
@@ -4928,9 +4930,17 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_set_locale': {
       if (typeof args.locale === 'string') {
         setContextMenuLocale(args.locale);
-        if (process.platform === 'darwin') {
-          appMenuLocale = normalizeMenuLocale(args.locale);
-          applyApplicationMenu();
+        appMenuLocale = normalizeMenuLocale(args.locale);
+        applyApplicationMenu();
+        if (state.trayController) {
+          try {
+            state.trayController.update(
+              state.lastTraySnapshot || { sessions: [], approvals: [] },
+              appMenuLocale,
+            );
+          } catch (error) {
+            log.warn('[electron] tray locale refresh failed', error);
+          }
         }
       }
       return null;
@@ -5563,7 +5573,8 @@ const setupTray = () => {
       ...assets,
       onAction: (action) => { void dispatchTrayAction(action); },
     });
-    state.trayController.update({ sessions: [], approvals: [] });
+    state.lastTraySnapshot = { sessions: [], approvals: [] };
+    state.trayController.update(state.lastTraySnapshot, normalizeMenuLocale(readPreferredLocale()));
     if (!state.trayFocusListener) {
       state.trayFocusListener = (_event, browserWindow) => {
         if (browserWindow && !browserWindow.isDestroyed()) {
