@@ -25,6 +25,7 @@ import { settingsHintsI18n } from './settings-hints.i18n';
 import { usageStatsI18n } from './usage-stats.i18n';
 import { webSearchI18n } from './websearch.i18n';
 import { sessionWarmingI18n } from './session-warming.i18n';
+import { connectionHeartbeatI18n } from './connection-heartbeat.i18n';
 import { compactionSettingsI18n } from './compaction-settings.i18n';
 import { heapSnapshotI18n } from './heap-snapshot.i18n';
 import { consoleBudgetsI18n } from './console-budgets.i18n';
@@ -43,6 +44,7 @@ import { snippetsI18n } from './snippets.i18n';
 import { sidebarWorkI18n } from './sidebar-work.i18n';
 import { sidebarSectionsI18n } from './sidebar-sections.i18n';
 import { worktreeArchiveI18n } from './worktree-archive.i18n';
+import { operatorChildrenI18n } from './operator-children.i18n';
 import { omniSearchI18n } from './omni-search.i18n';
 import { overviewI18n } from './overview.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
@@ -62,6 +64,7 @@ import { markdownOutlineI18n } from './markdown-outline.i18n';
 import { markdownGithubI18n } from './markdown-github.i18n';
 import { autocompleteScopeI18n } from './autocomplete-scope.i18n';
 import { workflowsI18n } from './workflows.i18n';
+import { subagentsI18n } from './subagents.i18n';
 import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 import { tooltipsDiffI18n } from './tooltips-diff.i18n';
@@ -809,6 +812,7 @@ export const dict: Record<I18nKey, string> = {
   ...usageStatsI18n.ru,
   ...webSearchI18n.ru,
   ...sessionWarmingI18n.ru,
+  ...connectionHeartbeatI18n.ru,
   ...compactionSettingsI18n.ru,
   ...heapSnapshotI18n.ru,
   ...consoleBudgetsI18n.ru,
@@ -827,6 +831,7 @@ export const dict: Record<I18nKey, string> = {
   ...sidebarWorkI18n.ru,
   ...sidebarSectionsI18n.ru,
   ...worktreeArchiveI18n.ru,
+  ...operatorChildrenI18n.ru,
   ...omniSearchI18n.ru,
   ...overviewI18n.ru,
   ...isolatedSpacesI18n.ru,
@@ -846,6 +851,7 @@ export const dict: Record<I18nKey, string> = {
   ...markdownGithubI18n.ru,
   ...autocompleteScopeI18n.ru,
   ...workflowsI18n.ru,
+  ...subagentsI18n.ru,
   ...sessionReferencesI18n.ru,
   ...guestStatusViewI18n.ru,
   ...tooltipsDiffI18n.ru,

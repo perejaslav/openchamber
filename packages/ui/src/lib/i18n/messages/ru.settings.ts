@@ -1,4 +1,5 @@
 import { settingsLayoutI18n } from './settings-layout.i18n';
+import { mobileAppSettingsI18n } from './mobile-app-settings.i18n';
 import { extensionsSettingsI18n } from './extensions.settings.i18n';
 import { guestIntegrationsI18n } from './guest-integrations.i18n';
 import { firstPartyIntegrationsI18n } from './first-party-integrations.i18n';
@@ -2753,6 +2754,7 @@ export const settingsDict = {
   ...settingsLayoutI18n.ru,
   ...firstPartyIntegrationsI18n.ru,
   ...extensionPowersI18n.ru,
+  ...mobileAppSettingsI18n.ru,
   'settings.page.integrations.title': 'Интеграции',
   'settings.agents.page.field.steps': 'Максимум шагов',
   'settings.agents.page.field.stepsTooltip': 'Сколько шагов с инструментами агент может сделать за один ход, прежде чем должен остановиться.',
