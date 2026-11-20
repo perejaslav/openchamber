@@ -1,17 +1,18 @@
 name: RU upstream sync
 
 # Keeps the Russian fork level with upstream without anyone watching: merge the
-# newest upstream release tag into `ru`, repair the translation gap, and hand
-# off to `fork-release.yml` by pushing a `ru-v<version>.<n>` tag.
+# newest upstream release tag into `ru` and repair the translation gap.
+# No releases are built; the Russian UI ships as a local patch
+# (scripts/ru/install-desktop-locale.ps1) over the official build.
 #
 # Two things about this file are load-bearing:
 #
 # 1. It also lives on `main`. GitHub only runs `schedule` and `workflow_dispatch`
 #    workflows that exist on the repository's default branch, and the default
 #    branch here is `main`, not `ru`.
-# 2. The branch and the tag are pushed with a PAT (`RU_SYNC_TOKEN`), never with
-#    GITHUB_TOKEN — a push authenticated with GITHUB_TOKEN does not trigger other
-#    workflows, and triggering `fork-release.yml` is the entire point.
+# 2. The branch is pushed with a PAT (`RU_SYNC_TOKEN`): upstream merges bring
+#    edits to files under `.github/workflows/`, and a push carrying those
+#    needs the Workflows permission, which `GITHUB_TOKEN` may lack.
 
 on:
   schedule:
@@ -23,13 +24,8 @@ on:
         description: 'Upstream release tag to sync, e.g. v2.0.4. Empty: newest upstream v* tag.'
         required: false
         type: string
-      force:
-        description: 'Sync and release even if ru-v<version>.* already exists'
-        required: false
-        default: false
-        type: boolean
       dry_run:
-        description: 'Do everything except push the branch, push the tag and create an issue'
+        description: 'Do everything except push the branch and create an issue'
         required: false
         default: false
         type: boolean
@@ -93,12 +89,10 @@ jobs:
           git remote add upstream "$UPSTREAM_URL"
           git fetch upstream --tags --force
 
-      - name: Resolve the upstream tag and the release build number
+      - name: Resolve the upstream tag
         id: target
         env:
           REQUESTED_REF: ${{ github.event.inputs.upstream_ref }}
-          FORCE: ${{ github.event.inputs.force }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -121,38 +115,21 @@ jobs:
             exit 1
           fi
 
-          # Next build number for this upstream version, so a failed build is
-          # retried under a fresh tag instead of being stuck forever. Asked of
-          # the remote, not of local tags, so a tag that exists only on origin
-          # still counts.
-          LAST_BUILD=0
-          while IFS=$'\t' read -r _sha ref; do
-            case "$ref" in *'^{}'*) continue ;; esac
-            n="${ref##*.}"
-            case "$n" in ''|*[!0-9]*) continue ;; esac
-            [ "$n" -gt "$LAST_BUILD" ] && LAST_BUILD="$n"
-          done < <(git ls-remote --tags origin "refs/tags/ru-v${VERSION}.*")
-          BUILD=$((LAST_BUILD + 1))
-
-          RELEASES="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name' 2>/dev/null || true)"
-          if printf '%s\n' "$RELEASES" | grep -qF "ru-v${VERSION}."; then
-            if [ "${FORCE:-false}" != "true" ]; then
-              echo "Релиз для ${VERSION} уже выпущен — синхронизировать нечего."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Релиз для ${VERSION} уже есть, но включён force — выпускаю ещё одну сборку."
+          if git merge-base --is-ancestor "$REF" HEAD; then
+            echo "Ветка уже содержит ${REF} — синхронизировать нечего."
+            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           {
             echo "ref=${REF}"
             echo "version=${VERSION}"
-            echo "build=${BUILD}"
-            echo "release_tag=ru-v${VERSION}.${BUILD}"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Апстрим-тег: ${REF} → сборка ru-v${VERSION}.${BUILD}"
+          echo "Апстрим-тег: ${REF} — ветка нуждается в мерже."
 
       - name: Report nothing to do
         if: steps.target.outputs.skip == 'true'
@@ -160,7 +137,7 @@ jobs:
           {
             echo "### Автосинхронизация: делать нечего"
             echo
-            echo "Релиз для версии \`${{ steps.target.outputs.version || '—' }}\` уже существует."
+            echo "Ветка \`ru\` уже содержит \`${{ steps.target.outputs.ref }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Merge the upstream tag into the sync branch
@@ -190,7 +167,7 @@ jobs:
           # that only adds modules (`*.i18n.ts` of v2.5.2) conflicts nowhere, yet
           # each new module still needs its `ru` block and its import and spread
           # in `ru.ts` / `ru.settings.ts` — without them the dictionary
-          # reconciliation fails and nothing is released.
+          # reconciliation fails and the branch is not pushed.
           if ! node scripts/ru/resolve-merge-conflicts.mjs > "$WORK_DIR/resolve.json" 2> "$WORK_DIR/resolve.log"; then
             {
               echo "Мерж ${REF}: часть конфликтов не удалось разрешить автоматически."
@@ -263,7 +240,7 @@ jobs:
           fi
           git commit -m "chore(ru): reconcile dictionaries after merging ${REF}"
 
-      - name: Run the release gate before pushing
+      - name: Run the gate before pushing
         if: steps.target.outputs.skip != 'true'
         run: |
           set -euo pipefail
@@ -271,13 +248,13 @@ jobs:
           # The gate checks the merged tree after the dictionary commit, so a green run means exactly this state is safe to push.
           if ! node scripts/ru/verify-release-gate.mjs > "$WORK_DIR/gate.txt" 2>&1; then
             {
-              echo "Гейт релиза упал после мержа — ветка не пушится, релиз не выпускается."
+              echo "Гейт упал после мержа — ветка не пушится."
               echo
               echo '```'
               tail -40 "$WORK_DIR/gate.txt"
               echo '```'
             } > "$WORK_DIR/reason.txt"
-            echo "::error::Гейт релиза упал."
+            echo "::error::Гейт упал."
             cat "$WORK_DIR/gate.txt"
             exit 1
           fi
@@ -288,45 +265,39 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The release gate runs on the pushed commit, not on this working tree.
-          # Anything left uncommitted here passes the tests above and then fails
-          # the release build — so refuse to push at all.
+          # The gate runs on the pushed commit, not on this working tree.
+          # Anything left uncommitted here passes the checks above but would
+          # not reach the push — so refuse to push at all.
           if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-            echo "::error::В рабочем дереве остались незакоммиченные правки — релиз собрался бы из другого состояния."
+            echo "::error::В рабочем дереве остались незакоммиченные правки — в пуш ушло бы другое состояние."
             git status --porcelain --untracked-files=no
             exit 1
           fi
 
-      - name: Push the branch and the release tag
+      - name: Push the branch
         if: steps.target.outputs.skip != 'true'
         env:
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          RELEASE_TAG: ${{ steps.target.outputs.release_tag }}
         run: |
           set -euo pipefail
 
           if [ "${DRY_RUN:-false}" = "true" ]; then
-            echo "Dry run: ветка и тег ${RELEASE_TAG} не пушатся."
+            echo "Dry run: ветка не пушится."
             exit 0
           fi
 
           git push origin "HEAD:refs/heads/${SYNC_BRANCH}"
-          git tag "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
-          echo "Тег ${RELEASE_TAG} отправлен — запускается релизный workflow."
 
       - name: Write the run summary
         if: steps.target.outputs.skip != 'true' && success()
         env:
           REF: ${{ steps.target.outputs.ref }}
-          RELEASE_TAG: ${{ steps.target.outputs.release_tag }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -uo pipefail
           {
             echo "### Автосинхронизация: ${REF}"
             echo
-            echo "- Сборка: \`${RELEASE_TAG}\`"
             node -e '
               const r = require(process.env.WORK_DIR + "/fill.json");
               console.log("- Непереведённых ключей подставлено английским текстом: " + r.added.length);
@@ -350,11 +321,11 @@ jobs:
             '
             if [ "${DRY_RUN:-false}" = "true" ]; then
               echo
-              echo "**Dry run:** ветка и тег не отправлены."
+              echo "**Dry run:** ветка не отправлена."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open an issue when the sync could not release
+      - name: Open an issue when the sync fails
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -366,7 +337,7 @@ jobs:
           set -uo pipefail
 
           REASON="$(cat "$WORK_DIR/reason.txt" 2>/dev/null || echo 'Причина не записана — смотрите лог прогона.')"
-          TITLE="Автосинхронизация с апстримом: ${VERSION:-?} не удалось выпустить"
+          TITLE="Автосинхронизация с апстримом: ${VERSION:-?} не удалось обновить"
 
           if [ "${DRY_RUN:-false}" = "true" ]; then
             echo "Dry run: issue не создаётся."
@@ -385,7 +356,7 @@ jobs:
           fi
 
           {
-            echo "Автосинхронизация не смогла выпустить русскую сборку, поэтому релиз **не** создан."
+            echo "Автосинхронизация не смогла влить апстрим в ветку \`ru\`."
             echo
             echo "**Апстрим-тег:** \`${REF:-неизвестен}\`"
             echo "**Прогон:** ${RUN_URL}"
@@ -395,7 +366,7 @@ jobs:
             echo "---"
             echo
             echo "Что делать: разобрать причину, поправить ветку \`ru\` вручную, затем запустить"
-            echo "workflow «RU upstream sync» с параметром \`force\` — он выпустит следующую сборку."
+            echo "workflow «RU upstream sync» вручную с тем же \`upstream_ref\`."
             echo "Подробности — в \`FORK.md\`, раздел «Автосинхронизация»."
           } > "$WORK_DIR/issue.md"
 
