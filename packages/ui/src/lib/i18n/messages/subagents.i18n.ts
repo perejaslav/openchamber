@@ -226,5 +226,18 @@ export const subagentsI18n = {
     'subagents.panel.summary': 'הושלמו {done}/{total}',
   },
   ru: {
+    'chat.workStatus.subagent.activity.thinking': 'Думает',
+    'chat.workStatus.subagent.activity.writing': 'Пишет',
+    'chat.workStatus.subagent.activity.silent': 'Молчит {time}',
+    'chat.workStatus.subagent.openPanel': 'Открыть в панели субагентов',
+    'chat.workStatus.subagent.contextAria': 'Контекст заполнен на {percent}%',
+    'contextPanel.mode.subagents': 'Субагенты',
+    'contextRail.surface.subagents.description': 'Субагенты этой сессии: что делает каждый, его отчёт и задача',
+    'subagents.panel.report': 'Отчёт',
+    'subagents.panel.noReport': 'Отчёта пока нет.',
+    'subagents.panel.task': 'Задача',
+    'subagents.panel.openSession': 'Открыть сессию',
+    'subagents.panel.empty': 'В этой сессии нет субагентов.',
+    'subagents.panel.summary': 'Готово {done}/{total}',
   },
 };

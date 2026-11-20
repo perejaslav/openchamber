@@ -10,7 +10,7 @@ describe('i18n runtime', () => {
     Object.defineProperty(win.navigator, 'languages', { value: ['ru-RU', 'uk-UA', 'fr-FR'], configurable: true });
     Object.defineProperty(globalThis, 'window', { value: win, configurable: true });
     try {
-      expect(detectInitialLocale()).toBe('uk');
+      expect(detectInitialLocale()).toBe('ru');
       window.__OPENCHAMBER_HOST_LANGUAGE__ = 'de-DE';
       expect(detectInitialLocale()).toBe('de');
       win.localStorage.setItem(LOCALE_STORAGE_KEY, JSON.stringify({ locale: 'es' }));
@@ -22,9 +22,9 @@ describe('i18n runtime', () => {
       Object.defineProperty(win.navigator, 'languages', { value: ['pt-PT', 'fr-CA'], configurable: true });
       expect(detectInitialLocale()).toBe('fr');
       Object.defineProperty(win.navigator, 'languages', { value: ['ru-RU'], configurable: true });
-      expect(detectInitialLocale()).toBe('en');
+      expect(detectInitialLocale()).toBe('ru');
       Object.defineProperty(win.navigator, 'languages', { value: [], configurable: true });
-      expect(detectInitialLocale()).toBe('en');
+      expect(detectInitialLocale()).toBe('ru');
       Object.defineProperty(win.navigator, 'languages', { value: ['zh-Hant-HK'], configurable: true });
       expect(detectInitialLocale()).toBe('zh-TW');
       Object.defineProperty(win.navigator, 'languages', { value: ['zh-HK'], configurable: true });
@@ -34,7 +34,7 @@ describe('i18n runtime', () => {
       win.localStorage.setItem(LOCALE_STORAGE_KEY, '{broken');
       expect(detectInitialLocale()).toBe('zh-TW');
       window.__OPENCHAMBER_HOST_LANGUAGE__ = 'unsupported';
-      expect(detectInitialLocale()).toBe('en');
+      expect(detectInitialLocale()).toBe('ru');
     } finally {
       if (previous) Object.defineProperty(globalThis, 'window', previous);
       else Reflect.deleteProperty(globalThis, 'window');

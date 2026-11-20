@@ -479,7 +479,5 @@ export const repositoryDiscussionsI18n = {
     'sourceBoard.discussion.closeOutdated': 'Закрыть как устаревшее',
     'sourceBoard.discussion.closeDuplicate': 'Закрыть как дубликат',
     'sourceBoard.discussion.reopen': 'Открыть обсуждение заново',
-    'chat.chatInput.linked.discussion.openInBrowserAria': 'Открыть обсуждение в браузере',
-    'chat.chatInput.linked.discussion.removeAria': 'Убрать связанное обсуждение',
   },
 } as const;

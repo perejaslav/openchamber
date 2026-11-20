@@ -76,5 +76,8 @@ export const connectionHeartbeatI18n = {
     'mobile.instances.heartbeat.noAnswer': 'אין תשובה',
   },
   ru: {
+    'mobile.instances.heartbeat.latency': '{ms} мс',
+    'mobile.instances.heartbeat.latencyAria': 'Время ответа {ms} мс',
+    'mobile.instances.heartbeat.noAnswer': 'Нет ответа',
   },
 } as const;

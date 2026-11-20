@@ -100,6 +100,9 @@ function supportedLocale(value: string | undefined | null): Locale | undefined {
   if (normalized === 'he' || normalized.startsWith('he-') || normalized === 'iw' || normalized.startsWith('iw-')) {
     return 'he';
   }
+  if (normalized === 'ru' || normalized.startsWith('ru-')) {
+    return 'ru';
+  }
   return undefined;
 }
 
@@ -158,8 +161,5 @@ export function detectInitialLocale(): Locale {
     if (locale) return locale;
   }
 
-  if (normalized === 'ru' || normalized.startsWith('ru-')) {
-    return 'ru';
-  }
   return DEFAULT_LOCALE;
 }

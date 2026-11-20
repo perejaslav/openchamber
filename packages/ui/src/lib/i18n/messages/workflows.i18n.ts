@@ -1219,6 +1219,8 @@ export const workflowsI18n = {
     'settings.openchamber.tools.field.agentWorkflowTool': 'Инструмент воркфлоу',
     'settings.openchamber.tools.field.agentWorkflowToolAria': 'Инструмент воркфлоу',
     'settings.openchamber.tools.field.agentWorkflowToolSummary': 'Распределять большие задачи между многими агентами в фоне после вашего одобрения каждого запуска.',
+    'settings.openchamber.tools.workflowAutoApprove.label': "Запускать без моего одобрения",
+    'settings.openchamber.tools.workflowAutoApprove.info': "Выключено: запуск, предложенный агентом, ждёт вашего одобрения в чате. Включено: он начинается сразу, поэтому согласованная работа продолжается, пока вас нет. Его по-прежнему можно остановить из его карточки.",
     'contextPanel.mode.workflows': 'Воркфлоу',
     'contextRail.surface.workflows.description': "Запуски воркфлоу этой сессии: агенты, журнал и результат",
     'workflows.panel.runPicker': 'Запуск воркфлоу',

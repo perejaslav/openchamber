@@ -1266,6 +1266,8 @@ export const providersI18n = {
     'settings.providers.grid.noMatches': 'Нет провайдеров, соответствующих «{query}».',
     'settings.providers.grid.empty': 'Провайдеров пока нет. Подключите один, чтобы начать общение.',
     'settings.providers.card.models': 'Модели: {count}',
+    'settings.providers.card.billing.payPerUse': 'Оплата за использование',
+    'settings.providers.card.billing.subscription': 'Подписка',
     'settings.providers.card.status.connected': 'Подключено',
     'settings.providers.card.status.accounts': 'Аккаунты: {count}',
     'settings.providers.card.status.environment': 'Из окружения',
