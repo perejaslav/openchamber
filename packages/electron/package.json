@@ -218,7 +218,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "perejaslav",
+      "owner": "openchamber",
       "repo": "openchamber"
     }
   }

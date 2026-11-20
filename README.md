@@ -4,11 +4,11 @@
 > с русской локализацией интерфейса и документации. Русский язык здесь включён **по умолчанию**.
 > Всё остальное — оригинальный проект.
 > Оригинальный README на английском: [`git show upstream/main:README.md`](https://github.com/openchamber/openchamber/blob/main/README.md).
-> Готовые сборки — в [Releases](https://github.com/perejaslav/openchamber/releases);
-> как обновляться и собирать — см. [FORK.md](FORK.md).
+> Официальные сборки — в [Releases](https://github.com/openchamber/openchamber/releases/latest);
+> русский интерфейс накатывается патчем поверх — см. [FORK.md](FORK.md).
 
 [![GitHub stars](https://img.shields.io/github/stars/openchamber/openchamber?style=flat&labelColor=100F0F&color=66800B)](https://github.com/openchamber/openchamber/stargazers)
-[![GitHub release](https://img.shields.io/github/v/release/perejaslav/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/perejaslav/openchamber/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/openchamber/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/openchamber/openchamber/releases/latest)
 [![Discord](https://img.shields.io/badge/Discord-join.svg?style=flat&labelColor=100F0F&color=8B7EC8&logo=discord&logoColor=FFFCF0)](https://discord.gg/ZYRSdnwwKA)
 [![Support the project](https://img.shields.io/badge/Support-Project-black?style=flat&labelColor=100F0F&color=EC8B49&logo=patreon&logoColor=FFFCF0)](https://www.patreon.com/openchamber)
 

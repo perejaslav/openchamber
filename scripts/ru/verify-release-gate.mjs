@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
  * Release gate of the RU fork: locale parity, fork-feature guards and the
- * type-check of all packages. Runs before pushing `ru`
- * (`ru-upstream-sync.yml`) and before building a release
- * (`fork-release.yml`) — one command, one place, so a broken upstream merge
- * can neither go public nor ship. The test list lives only here.
+ * type-check of all packages. Runs in `ru-upstream-sync.yml` before pushing
+ * `ru` — one command, one place, so a broken upstream merge can never go
+ * public. The test list lives only here.
  *
  * Run from the repository root. First failure stops the run with a non-zero
  * exit code and names the step that failed.
