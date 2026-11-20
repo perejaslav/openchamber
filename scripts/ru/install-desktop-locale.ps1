@@ -52,6 +52,21 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $MarkerName   = '.openchamber-locale-patch'
+$RepoRoot     = Resolve-Path (Join-Path $PSScriptRoot '..\..')
+
+function Get-RepoVersion {
+    $pkg = Get-Content (Join-Path $RepoRoot 'packages\electron\package.json') -Raw
+    if ($pkg -match '"version"\s*:\s*"([^"]+)"') { return $Matches[1] }
+    throw 'Cannot read version from packages/electron/package.json'
+}
+
+function Get-InstalledVersion {
+    $exe = Join-Path $InstallDir 'OpenChamber.exe'
+    if (-not (Test-Path $exe)) { return $null }
+    $raw = (Get-Item $exe).VersionInfo.ProductVersion
+    if ($raw -match '^(\d+\.\d+\.\d+)') { return $Matches[1] }
+    return $raw
+}
 $ResourcesDir = Join-Path $InstallDir 'resources'
 $TargetDir    = Join-Path $ResourcesDir 'web-dist'
 $BackupDir    = Join-Path $ResourcesDir 'web-dist.orig'
@@ -123,6 +138,12 @@ switch ($Action) {
         Write-Output "source build   : $SourceDir"
         Write-Output ""
         Write-Output "STATE: $($state.ToUpper())"
+        $repoVer = Get-RepoVersion
+        $instVer = Get-InstalledVersion
+        if ($instVer -and ($instVer -ne $repoVer)) {
+            Write-Output "  WARNING: installed app ($instVer) does not match branch ($repoVer) -"
+            Write-Output "  'apply' will refuse until the versions match."
+        }
         Write-Output "  UI dictionary chunks (common.language.russian): $(if ($dict) { $dict -join ', ' } else { 'none' })"
         Write-Output "  Intl/CLDR chunks: $(Get-IntlChunkCount -Dir $TargetDir)"
 
@@ -151,6 +172,12 @@ switch ($Action) {
 
     'apply' {
         Assert-AppClosed
+        $repo = Get-RepoVersion
+        $installed = Get-InstalledVersion
+        if (-not $installed) { throw "Installed app not found at $(Join-Path $InstallDir 'OpenChamber.exe')" }
+        if ($installed -ne $repo) {
+            throw "Version mismatch: installed app is $installed, branch is $repo. Update the app or check out the matching release first."
+        }
         if (-not (Test-Path $SourceDir)) {
             throw "Branch build not found at $SourceDir. Run: bun run --cwd packages/electron build:web-assets"
         }
