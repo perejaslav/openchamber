@@ -2105,6 +2105,11 @@ const closeTabOrWindow = () => {
 
 let menuShortcuts = {};
 let appMenuLocale = 'en';
+// Last locale reported by the renderer via desktop_set_locale. The renderer's
+// locale lives in its own localStorage and is NOT mirrored into settings root,
+// so readPreferredLocale() alone would answer 'en' and every desktop_tray_update
+// would flip the tray back to English. Null until the first report.
+let rendererLocale = null;
 const menuKey = (id, fallback) => menuAccelerator(menuShortcuts, id, fallback);
 
 const applyApplicationMenu = () => {
@@ -4298,7 +4303,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       state.lastTraySnapshot = args && typeof args === 'object' ? args : { sessions: [], approvals: [] };
       if (state.trayController) {
         try {
-          state.trayController.update(state.lastTraySnapshot, normalizeMenuLocale(readPreferredLocale()));
+          state.trayController.update(state.lastTraySnapshot, rendererLocale ?? normalizeMenuLocale(readPreferredLocale()));
         } catch (error) {
           log.warn('[electron] tray update failed', error);
         }
@@ -4930,7 +4935,8 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_set_locale': {
       if (typeof args.locale === 'string') {
         setContextMenuLocale(args.locale);
-        appMenuLocale = normalizeMenuLocale(args.locale);
+        rendererLocale = normalizeMenuLocale(args.locale);
+        appMenuLocale = rendererLocale;
         applyApplicationMenu();
         if (state.trayController) {
           try {
