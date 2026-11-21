@@ -1,0 +1,363 @@
+---
+title: Обратный прокси
+description: Правильно настройте OpenChamber за Nginx, Nginx Proxy Manager или другим обратным прокси.
+---
+
+# Обратный прокси
+
+Эта страница нужна, если вы запускаете OpenChamber за Nginx, Nginx Proxy Manager, Caddy, Cloudflare или другим обратным прокси.
+
+## Перед настройкой прокси
+
+1. Сначала убедитесь, что OpenChamber работает напрямую.
+2. Откройте `http://<server-ip>:3000` или свой порт из той же сети.
+3. Добавляйте обратный прокси только после того, как прямое подключение работает.
+
+## Что должен поддерживать прокси
+
+- WebSockets для живой передачи сообщений:
+  - `/api/event/ws`
+  - `/api/global/event/ws`
+  - `/api/terminal/ws`
+- SSE без буферизации:
+  - `/api/event`
+  - `/api/global/event`
+  - `/api/notifications/stream`
+  - `/api/openchamber/events`
+  - `/api/terminal/:sessionId/stream`
+- Большие тела запросов для вложений и файловых операций
+- Долгие тайм-ауты чтения для живых потоков и терминальных сессий
+
+## Важные правила
+
+- Включите проксирование WebSocket.
+- Отключите буферизацию на маршрутах SSE.
+- Отключите gzip на прокси, если OpenChamber уже сжимает ответы.
+- Оставляйте сжатие включённым только на одном уровне.
+- Передавайте обычные заголовки прокси, такие как `Host`, `X-Forwarded-For` и `X-Forwarded-Proto`.
+- Если прокси работает на другой машине или в другом контейнере, укажите его адрес в [`OPENCHAMBER_TRUSTED_PROXIES`](/environment/#openchamber_trusted_proxies). Иначе все за ним делят один лимит неудачных попыток входа.
+- Увеличьте лимиты размера тела, если пользователи загружают файлы.
+
+## Короткий чек-лист
+
+- OpenChamber доступен напрямую в локальной сети
+- WebSockets включены в прокси
+- На маршрутах SSE буферизация отключена
+- `gzip off` на хосте прокси, или сжатие на прокси отключено иначе
+- `client_max_body_size` достаточно велик для вложений
+- `proxy_read_timeout` достаточно долог для потоков
+
+## Пример: Nginx
+
+<details>
+<summary>Показать пример конфигурации</summary>
+
+```nginx
+client_max_body_size 50M;
+client_body_buffer_size 50M;
+proxy_request_buffering off;
+
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $host;
+
+gzip off;
+
+location = /api/terminal/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location = /api/global/event/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location = /api/event/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location ~ ^/api/(event|global/event|notifications/stream|openchamber/events)$ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location ~ ^/api/terminal/.+/stream$ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location /api {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:3000;
+}
+```
+
+</details>
+
+## Пример: Nginx Proxy Manager
+
+<details>
+<summary>Показать пример для вкладки Advanced</summary>
+
+```nginx
+client_max_body_size 50M;
+client_body_buffer_size 50M;
+proxy_request_buffering off;
+
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $host;
+
+gzip off;
+
+location = /api/terminal/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/global/event/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/event/ws {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/event {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/global/event {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/notifications/stream {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location = /api/openchamber/events {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location ~ ^/api/terminal/.+/stream$ {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_set_header Accept "text/event-stream";
+    proxy_set_header Cache-Control "no-cache";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    add_header X-Accel-Buffering "no" always;
+    add_header Cache-Control "no-cache, no-transform" always;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location /api {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 30s;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:3000;
+}
+```
+
+</details>
+
+Также включите `Websockets Support` в Nginx Proxy Manager для этого хоста.
+
+## Частые признаки неполадок
+
+### Страница загружается, но отправка сообщений не работает
+
+- В прокси не включены WebSockets
+- `/api/event/ws` или `/api/global/event/ws` проходят некорректно
+
+### Уведомления или живой статус не обновляются
+
+- один из маршрутов SSE буферизуется или кешируется
+- отсутствует `X-Accel-Buffering "no"`
+
+### Загрузка файлов не удаётся
+
+- `client_max_body_size` слишком мал
+
+### Локально всё работает, но ломается только за прокси
+
+- прокси сжимает и буферизует живой трафик
+- в прокси нет поддержки WebSocket
+
+## Пример: Caddy
+
+<details>
+<summary>Показать пример конфигурации</summary>
+
+```caddy
+reverse_proxy 127.0.0.1:3000 {
+    # WebSocket support is automatic in Caddy
+
+    # Flush SSE responses immediately
+    flush_interval -1
+
+    # Pass through Host and proxy headers
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+
+    # Increase timeouts for long-lived streams
+    transport http {
+        read_timeout 3600s
+        write_timeout 3600s
+    }
+}
+```
+
+</details>
+
+Caddy сам обрабатывает обновление до WebSocket — дополнительная настройка не нужна. Директива `flush_interval -1` гарантирует, что части SSE пересылаются сразу, без буферизации.
+
+## Прокси со входом (Authentik, Authelia, oauth2-proxy)
+
+Если пользователи входят на прокси, прежде чем попасть в OpenChamber, панелям расширений нужно одно исключение. Панель работает в изолированном фрейме, и браузер не отправляет cookie входа прокси с собственными запросами этого фрейма, поэтому прокси отдаёт файлы панели на свою страницу входа, и панель остаётся пустой.
+
+Пропустите `/api/guest-files/` без входа. Этот путь отдаёт только файлы установленных вами расширений и только по ссылке, которую OpenChamber выдаёт вошедшему пользователю для этой панели. Больше он ничего не открывает. С Nginx и `auth_request`:
+
+```nginx
+location ^~ /api/guest-files/ {
+    auth_request off;
+    proxy_pass http://127.0.0.1:3000;
+}
+```
+
+В других прокси добавьте правило, пропускающее без входа тот же префикс пути. Не освобождайте `/api/guests/`: этот путь также устанавливает расширения и обслуживает их запросы, и без пароля к интерфейсу OpenChamber им мог бы воспользоваться кто угодно.
+
+## Предупреждение о CDN и двойном сжатии
+
+Если вы ставите CDN (например, Cloudflare) перед обратным прокси, помните о двойном сжатии:
+
+- OpenChamber сжимает HTTP-ответы через gzip (порог 1 КБ).
+- Cloudflare и другие CDN по умолчанию тоже сжимают ответы.
+- Из-за этого ответы могут оказаться сжатыми дважды, а заголовки `Content-Encoding` — неверными.
+
+Чтобы этого избежать, отключите сжатие на **одном** уровне:
+
+- **Cloudflare:** Rules → Compression → disable (или режим «Passthrough»).
+- **Nginx:** `gzip off` (уже показано в примерах выше).
+- **Caddy:** Caddy не сжимает повторно по умолчанию, если upstream уже отправляет сжатое содержимое.
+
+OpenChamber исключает маршруты потоковой передачи SSE из сжатия, но CDN всё равно может их буферизовать. Смотрите документацию своего CDN, как отключить буферизацию на путях SSE.
+
+## См. также
+
+- [Туннели](/tunnels/)
+- [Устранение неполадок](/troubleshooting/)

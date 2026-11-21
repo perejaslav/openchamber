@@ -1,0 +1,138 @@
+---
+title: Туннели
+description: Безопасно откройте OpenChamber для удалённого и мобильного доступа.
+---
+
+# Туннели
+
+Туннель — это ссылка на ваш OpenChamber, поэтому до него можно добраться из обычного браузера в другой сети или, с Tailscale Serve, с любого устройства в вашем tailnet. Используйте `openchamber tunnel`, чтобы создать туннель для работающего экземпляра.
+
+> Для подключения **собственных устройств** (мобильного приложения, другого десктопа) туннель обычно не нужен: [сопрягите их](/connect-devices/) и позвольте сквозному шифрованному [приватному релею](/private-relay/) обеспечить доступ вне дома без какой-либо настройки.
+
+## Что нужно заранее
+
+OpenChamber запускает CLI провайдера туннеля на вашей машине. Сначала установите провайдера, которым хотите пользоваться:
+
+```bash
+brew install cloudflared
+brew install ngrok
+```
+
+Для Tailscale установите [приложение Tailscale](https://tailscale.com/download) и войдите. На Mac приложения достаточно: OpenChamber находит его утилиту командной строки внутри приложения.
+
+Быстрые туннели Cloudflare работают через `cloudflared`. Ngrok требует аккаунт ngrok и authtoken из панели ngrok:
+
+```bash
+ngrok config add-authtoken <your-ngrok-token>
+```
+
+## Быстрый старт
+
+1. Запустите OpenChamber:
+
+```bash
+openchamber
+```
+
+Если пропустить этот шаг, `openchamber tunnel start` может сам запустить сервер CLI. При автозапуске можно передать параметры сервера, такие как `--port`, `--host`, `--lan`, `--ui-password` и `--api-only`.
+
+2. Запустите туннель Cloudflare:
+
+```bash
+openchamber tunnel start --provider cloudflare --mode quick
+```
+
+Или запустите туннель Ngrok:
+
+```bash
+openchamber tunnel start --provider ngrok --mode quick
+```
+
+Или поделитесь им с устройствами в вашем tailnet через Tailscale Serve:
+
+```bash
+openchamber tunnel start --provider tailscale --mode serve
+```
+
+3. Проверьте состояние:
+
+```bash
+openchamber tunnel status
+```
+
+Когда туннель поднят, `status` показывает публичный URL. Откройте его или отсканируйте QR-код, чтобы добраться до OpenChamber откуда угодно.
+
+По умолчанию OpenChamber печатает QR-код в интерактивных сессиях TTY. Используйте `--qr`, чтобы принудительно вывести QR-код, или `--no-qr`, чтобы отключить его.
+
+## Провайдеры
+
+- `cloudflare`: режимы quick, managed remote и managed local
+- `ngrok`: режим quick
+- `tailscale`: режим serve, доступный только устройствам в вашем tailnet, и режим funnel, доступный всему интернету
+
+## Tailscale
+
+Оба режима используют адрес вашей машины в tailnet, например `https://laptop.example.ts.net`. Выберите порт с помощью `--https-port`: 443 (по умолчанию), 8443 или 10000. Меняйте его, если Tailscale уже публикует на 443 что-то другое.
+
+В первый раз Tailscale попросит включить HTTPS (для Serve) или Funnel для вашего tailnet. OpenChamber останавливается и показывает ссылку Tailscale: откройте её, подтвердите и запустите туннель снова. В Linux Tailscale разрешает делиться портами только root или своему оператору; назначьте себя оператором один раз командой `sudo tailscale set --operator=$USER`.
+
+Остановка туннеля убирает то, чем OpenChamber поделился через Tailscale, и не трогает остальную вашу настройку Tailscale.
+
+## Управляемые режимы
+
+### Управляемый удалённый
+
+Используйте токен и имя хоста, которыми управляет Cloudflare:
+
+```bash
+openchamber tunnel start --provider cloudflare --mode managed-remote --token-file ~/.secrets/cf-token --hostname app.example.com
+```
+
+### Управляемый локальный
+
+Используйте локальную конфигурацию `cloudflared`:
+
+```bash
+openchamber tunnel start --provider cloudflare --mode managed-local --config ~/.cloudflared/config.yml
+```
+
+## Профили (managed-remote)
+
+Сохраните профиль для повторного использования:
+
+```bash
+openchamber tunnel profile add --provider cloudflare --mode managed-remote --name prod-main --hostname app.example.com --token-file ~/.secrets/cf-token
+```
+
+Запустите туннель с сохранённым профилем:
+
+```bash
+openchamber tunnel start --profile prod-main
+```
+
+## Полезные команды
+
+```bash
+openchamber tunnel providers
+openchamber tunnel ready --provider cloudflare
+openchamber tunnel ready --provider ngrok
+openchamber tunnel doctor --provider cloudflare
+openchamber tunnel doctor --provider ngrok
+openchamber tunnel doctor --provider tailscale
+openchamber tunnel stop --port 3000
+```
+
+## Особенности работы
+
+- один активный туннель на экземпляр OpenChamber (порт)
+- запуск нового режима или провайдера на том же экземпляре заменяет предыдущий туннель
+- создание новой ссылки подключения отзывает предыдущую неиспользованную
+- автозапуск туннеля сохраняет флаги сервера, такие как `--ui-password` и `--api-only`, в настройках экземпляра, которые используются при перезапуске и обновлении
+
+## См. также
+
+- [Подключение устройства](/connect-devices/) — сопрягите свои устройства без публичного URL
+- [Безопасность](/security/) — защитите интерфейс, прежде чем выставлять его наружу
+- [Туннели в десктопе](/desktop-tunnels/) — настройка туннеля в десктопном приложении без запуска из CLI
+- [Мобильные приложения и PWA](/mobile/) — добирайтесь до OpenChamber с телефона
+- [Устранение неполадок](/troubleshooting/) — если ссылка туннеля не работает

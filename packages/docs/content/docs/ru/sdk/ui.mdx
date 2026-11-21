@@ -1,0 +1,159 @@
+---
+title: UI-кит
+description: Кнопки, поля, выпадающие списки, вкладки, списки и другие готовые элементы из @openchamber/sdk/ui, с которыми расширение выглядит как остальной OpenChamber.
+---
+
+# UI-кит
+
+`@openchamber/sdk/ui` — это набор готовых элементов управления, которые используют цвета, шрифты и отступы приложения, поэтому ваше расширение выглядит как остальной OpenChamber, не копируя его стили. Каждый элемент — функция: вы даёте ей свой элемент и его настройки, она рисует себя там и возвращает `{ update, dispose }`. Вы собираете элементы в экран и храните данные у себя. Кит никогда не обращается ни к вашему провайдеру, ни к OpenChamber; `host.request`, `host.attach` и остальное вы вызываете сами. Для всего, чего в ките нет, можно писать свой HTML и CSS, но сначала берите кит: его элементы сами следуют теме пользователя, отступам и клавиатурным привычкам, поэтому панель, собранная из них, ощущается частью OpenChamber, а не сайтом внутри него.
+
+## Сначала вызовите `applyHostReady`
+
+Элементы читают цвета из CSS-переменных, которые `applyHostReady` записывает на страницу. Он также задаёт шрифт и цвет текста приложения на корне страницы, поэтому обычный HTML, который вы добавляете сами, тоже выглядит как надо. Вызывайте его внутри `host.onReady` перед первым монтированием, и цвета будут следовать теме приложения, когда пользователь её переключает.
+
+```ts
+import { applyHostReady } from "@openchamber/sdk/ui";
+
+let mounted = false;
+host.onReady((ctx) => {
+  applyHostReady(ctx, document.documentElement);
+  if (mounted) return;
+  mounted = true;
+  // Mount controls and register listeners once here.
+});
+```
+
+Кит использует вычисленные хостом цвета текста для тонированных кнопок, значков, заголовков баннеров, сообщений валидации и ссылок. Контраст самому рассчитывать не нужно.
+
+Для своего CSS `applyHostReady` даёт `--primary-text`, `--success-text`, `--warning-text`, `--error-text` и `--info-text`, а также соответствующие псевдонимы `--oc-*-text`. Используйте их для текста на нейтральном или слегка тонированном фоне. Базовые цвета оставляйте для заливок, а для текста на сплошной заливке `--oc-primary` используйте `--oc-primary-fg`. Применяйте каждый снимок `onReady`, чтобы цвета оставались актуальными.
+
+`onReady` может срабатывать много раз, пока панель открыта, в том числе при смене контекста сессии. Применяйте тему при каждом вызове, но монтируйте элементы и регистрируйте слушателей только один раз. Храните черновые значения вне функций отрисовки. При переключении вкладок скрывайте существующие панели или восстанавливайте их значения из своего состояния, а не очищайте их.
+
+## Что меняется при обновлении OpenChamber
+
+Цвета, рамки, радиусы углов и состояния наведения, выбора и фокуса у элементов кита берутся из версии OpenChamber, в которой работает ваше расширение, поэтому после обновления они следуют за приложением без пересборки. Размеры и отступы остаются теми, с которыми собран ваш бандл, поэтому раскладка не сдвигается; они меняются, когда вы пересобираете расширение с более новым SDK. OpenChamber добавляет свои стили после вашего документа, поэтому, чтобы изменить оформление элемента кита, берите селектор специфичнее, чем у кита, например `#root .oc-sdk-btn`.
+
+## Синхронизация выбора и ввода
+
+`mountTabs`, `mountSelect`, `mountCheckbox` и `mountSwitch` сообщают об изменениях через `onChange`; сами они не фиксируют новые `activeId`, `value` или `checked`. Сохраните новое значение и передайте его назад через `update`. Текстовые поля и поля поиска сразу показывают введённый текст, но их свойства всё равно требуют `update({ value })`, иначе следующее обновление может вернуть старое значение. `onClick` кнопки не меняет её вариант; для выбора режимов предпочитайте `mountTabs`.
+
+Монтируйте эти элементы один раз в существующем `root` вашей панели:
+
+```ts
+import { mountSelect, mountTabs } from "@openchamber/sdk/ui";
+
+let activeId = "convert";
+const tabs = mountTabs(root, {
+  items: [{ id: "convert", label: "Convert" }, { id: "format", label: "Format" }],
+  activeId,
+  onChange: (next) => {
+    activeId = next;
+    tabs.update({ activeId });
+    // Show the matching panel without discarding its draft values.
+  },
+});
+
+let format = "json";
+const select = mountSelect(root, {
+  options: [{ id: "json", label: "JSON" }, { id: "yaml", label: "YAML" }],
+  value: format,
+  onChange: (next) => {
+    format = next;
+    select.update({ value: format });
+  },
+});
+```
+
+Для кнопки смены формата поменяйте оба значения в своём состоянии и вызовите `update({ value })` на обоих существующих обработчиках select. Не монтируйте новые элементы, чтобы изменить их значения. Вызывайте `dispose()`, когда убираете элемент.
+
+## Что можно монтировать
+
+| Функция | Что рисует |
+| --- | --- |
+| `mountButton` | Кнопка. `variant` — `default`, `secondary`, `outline`, `ghost` или `destructive`; `size` — `default`, `sm` или `xs`. `loading` показывает спиннер и блокирует нажатия. |
+| `mountTextField` | Поле с подписью или textarea с `multiline`. Необязательный текст `helper` или `error`, маскировка `password` и `mono` для токенов и id. |
+| `mountSearchField` | Поле поиска с лупой и кнопкой очистки. Escape очищает его. |
+| `mountSelect` | Выпадающий список. `searchable` добавляет поле фильтра в верхней части списка. Стрелки перемещают, Enter выбирает, Escape закрывает. |
+| `mountCheckbox`, `mountSwitch` | Флажок или переключатель с подписью и необязательным `description`. |
+| `mountTabs` | Вкладки-пилюли, каждая с необязательным счётчиком. Стрелки влево и вправо переключают между ними. |
+| `mountBadge` | Маленькая пилюля. `tone` — `neutral`, `primary`, `success`, `warning`, `error` или `info`. |
+| `mountList` | Список, удобный для клавиатуры. В каждой строке может быть ведущий ключ, заголовок, подзаголовок, выровненный вправо метатекст и значок. |
+| `mountEmpty` | Пустое состояние по центру с заголовком, строкой текста и необязательной кнопкой. |
+| `mountSpinner` | Кольцо загрузки с необязательной подписью. |
+| `mountBanner` | Тонированное уведомление с заголовком, текстом и необязательным действием. |
+| `mountSeparator` | Тонкая линия, по желанию с подписью посередине. |
+| `mountProgress` | Полоса прогресса от 0 до 100. |
+| `mountMenu` | Кнопка, открывающая список действий. Пункты могут быть деструктивными, отключёнными или быть разделителем. |
+| `mountText` | Текст от вашего провайдера. Изображения в стиле Markdown и ссылки `http(s)` становятся настоящими изображениями и ссылками; всё остальное остаётся простым текстом, поэтому недоверенное содержимое безопасно показывать. |
+
+Рядом с элементами поставляются три простых помощника. `filterSelectOptions(options, query)` — то же сопоставление, которое использует `mountSelect`. `splitTextMedia(text)` — то, что `mountText` делает перед отрисовкой. `moveListSelection` — шаг клавиатуры, общий для списка, выпадающего списка и меню, на случай если вы строите свой список.
+
+## Список с поиском
+
+```ts
+import { applyHostReady, mountEmpty, mountList, mountSearchField } from "@openchamber/sdk/ui";
+
+let mounted = false;
+host.onReady((ctx) => {
+  applyHostReady(ctx, document.documentElement);
+  if (mounted) return;
+  mounted = true;
+  const root = document.querySelector("#root")!;
+  const searchRoot = root.appendChild(document.createElement("div"));
+  const listRoot = root.appendChild(document.createElement("div"));
+  const emptyRoot = root.appendChild(document.createElement("div"));
+
+  let query = "";
+  let empty: { dispose: () => void } | null = null;
+
+  const list = mountList(listRoot, {
+    items: [],
+    onSelect: (id) => {
+      const task = tasks.find((item) => item.id === id);
+      if (task) void host.attach({ providerId: "acme-hello", id, title: task.title, url: task.url });
+    },
+  });
+
+  const paint = () => {
+    const rows = tasks
+      .filter((task) => task.title.toLowerCase().includes(query.toLowerCase()))
+      .map((task) => ({ id: task.id, leading: task.key, title: task.title, meta: task.updated }));
+    list.update({ items: rows });
+    empty?.dispose();
+    empty = rows.length === 0
+      ? mountEmpty(emptyRoot, { title: "No tasks match", body: "Try a shorter search." })
+      : null;
+  };
+
+  const search = mountSearchField(searchRoot, {
+    value: query,
+    placeholder: "Search tasks",
+    onChange: (next) => {
+      query = next;
+      search.update({ value: next });
+      paint();
+    },
+  });
+  paint();
+});
+```
+
+`update` принимает только те настройки, которые изменились. Список сохраняет выделенную строку между обновлениями, пока эта строка на месте.
+
+## Ссылки из текста провайдера
+
+Ваша страница работает в песочнице и не может сама открыть новую вкладку. Когда используете `mountText`, передайте `onOpenUrl` и отдайте ссылку OpenChamber:
+
+```ts
+import { mountText } from "@openchamber/sdk/ui";
+
+mountText(root, {
+  text: comment.body,
+  onOpenUrl: (url) => void host.openUrl(url),
+});
+```
+
+## См. также
+
+- [Создание расширения](/sdk/) — папка, манифест и установка
+- [Host API](/sdk/host/) — `connectHost`, прикрепление и коды ошибок
