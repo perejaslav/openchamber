@@ -1,55 +1,11 @@
 
 import { Tray, Menu, nativeImage } from 'electron';
-import { buildTrayMenuTemplate, trayMenuKey } from './tray-menu.mjs';
-import { menuLabel, normalizeMenuLocale } from './menu-locales.mjs';
+import { buildTrayMenuTemplate, computeTrayTooltip, trayMenuKey } from './tray-menu.mjs';
+import { normalizeMenuLocale } from './menu-locales.mjs';
 
 const isMac = process.platform === 'darwin';
 const isLinux = process.platform === 'linux';
 const LINUX_TRAY_ICON_PX = 22;
-const ANIM_INTERVAL_MS = 200;
-
-const pluralCategory = (locale, count) => {
-  try {
-    return new Intl.PluralRules(locale).select(count);
-  } catch {
-    return new Intl.PluralRules('en').select(count);
-  }
-};
-
-const formatNumber = (locale, count) => {
-  try {
-    return new Intl.NumberFormat(locale).format(count);
-  } catch {
-    return String(count);
-  }
-};
-
-// Status fragments for the tray tooltip. Only en and ru carry real wording;
-// every other locale falls back to the English table until translators add it.
-const tooltipWords = (locale) => {
-  if (normalizeMenuLocale(locale) === 'ru') {
-    return {
-      session: (n) => {
-        const form = { one: 'сессия', few: 'сессии', many: 'сессий', other: 'сессий' }[pluralCategory('ru', n)] ?? 'сессий';
-        return `${formatNumber('ru', n)} ${form}`;
-      },
-      approvals: (n) => `${formatNumber('ru', n)} ${pluralCategory('ru', n) === 'one' ? 'ожидает подтверждения' : 'ожидают подтверждения'}`,
-      error: (n) => `${formatNumber('ru', n)} ${pluralCategory('ru', n) === 'one' ? 'с ошибкой' : 'с ошибками'}`,
-      busy: (n) => `${formatNumber('ru', n)} ${pluralCategory('ru', n) === 'one' ? 'работает' : 'работают'}`,
-      unseen: (n) => {
-        const form = { one: 'непрочитанная', few: 'непрочитанные', many: 'непрочитанных', other: 'непрочитанных' }[pluralCategory('ru', n)] ?? 'непрочитанных';
-        return `${formatNumber('ru', n)} ${form}`;
-      },
-    };
-  }
-  return {
-    session: (n) => `${formatNumber('en', n)} session${n === 1 ? '' : 's'}`,
-    approvals: (n) => `${formatNumber('en', n)} awaiting approval`,
-    error: (n) => `${formatNumber('en', n)} with errors`,
-    busy: (n) => `${formatNumber('en', n)} working`,
-    unseen: (n) => `${formatNumber('en', n)} unread`,
-  };
-};
 
 const computeTitle = (counts) => {
   if (counts.approvals > 0) return `◆ ${counts.approvals}`;
@@ -63,18 +19,7 @@ const computeIconState = (counts) => {
   return 'idle';
 };
 
-const computeTooltip = (counts, sessionCount, locale = 'en') => {
-  const normalizedLocale = normalizeMenuLocale(locale);
-  if (sessionCount === 0) return menuLabel(normalizedLocale, 'tray.tooltipNoSessions');
-  const words = tooltipWords(normalizedLocale);
-  const bits = [];
-  if (counts.approvals > 0) bits.push(words.approvals(counts.approvals));
-  if (counts.error > 0) bits.push(words.error(counts.error));
-  if (counts.busy > 0) bits.push(words.busy(counts.busy));
-  if (counts.unseen > 0) bits.push(words.unseen(counts.unseen));
-  const suffix = bits.length ? ` · ${bits.join(', ')}` : ` · ${menuLabel(normalizedLocale, 'tray.tooltipIdle')}`;
-  return `OpenChamber — ${words.session(sessionCount)}${suffix}`;
-};
+const ANIM_INTERVAL_MS = 200;
 
 const toTemplateImage = (p) => {
   let image = nativeImage.createFromPath(p);
@@ -93,8 +38,27 @@ const toTemplateImage = (p) => {
   return image;
 };
 
-export const createTrayController = ({ idleIconPath, unseenIconPath, breathIconPaths, statusIconPaths, onAction }) => {
+export const createTrayLocaleRouter = (applyLocale) => {
+  const localeBySender = new WeakMap();
+  let owner = null;
+  return {
+    setLocale: (sender, locale) => {
+      if (!sender || !locale) return;
+      localeBySender.set(sender, locale);
+      if (sender === owner) applyLocale(locale);
+    },
+    publish: (sender) => {
+      owner = sender ?? null;
+      const locale = owner ? localeBySender.get(owner) : undefined;
+      if (locale) applyLocale(locale);
+    },
+  };
+};
+
+export const createTrayController = ({ idleIconPath, unseenIconPath, breathIconPaths, statusIconPaths, onAction, locale: initialLocale }) => {
   let tray = null;
+  let locale = normalizeMenuLocale(initialLocale);
+  let lastSnapshot = null;
   let lastTitle = null;
   let lastTooltip = null;
   let lastMenuKey = null;
@@ -161,15 +125,15 @@ export const createTrayController = ({ idleIconPath, unseenIconPath, breathIconP
     return tray;
   };
 
-  const buildMenu = (snapshot, locale) => {
+  const buildMenu = (snapshot) => {
     const menu = Menu.buildFromTemplate(buildTrayMenuTemplate(snapshot, { onAction, statusIcons, locale }));
     menu.on('menu-will-show', () => onAction({ type: 'menu-opened' }));
     return menu;
   };
 
-  const update = (rawSnapshot, locale = 'en') => {
-    const normalizedLocale = normalizeMenuLocale(locale);
+  const update = (rawSnapshot) => {
     const snapshot = rawSnapshot && typeof rawSnapshot === 'object' ? rawSnapshot : {};
+    lastSnapshot = snapshot;
     const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
     const approvals = Array.isArray(snapshot.approvals) ? snapshot.approvals : [];
 
@@ -187,14 +151,14 @@ export const createTrayController = ({ idleIconPath, unseenIconPath, breathIconP
       lastTitle = title;
     }
     applyIconState(computeIconState(counts));
-    const tooltip = computeTooltip(counts, sessions.length, normalizedLocale);
+    const tooltip = computeTrayTooltip(counts, sessions.length, locale);
     if (tooltip !== lastTooltip) {
       widget.setToolTip(tooltip);
       lastTooltip = tooltip;
     }
-    const key = trayMenuKey(snapshot, normalizedLocale);
+    const key = trayMenuKey(snapshot, locale);
     if (key !== lastMenuKey) {
-      widget.setContextMenu(buildMenu(snapshot, normalizedLocale));
+      widget.setContextMenu(buildMenu(snapshot));
       lastMenuKey = key;
     }
   };
@@ -205,11 +169,20 @@ export const createTrayController = ({ idleIconPath, unseenIconPath, breathIconP
       tray.destroy();
     }
     tray = null;
+    lastSnapshot = null;
     lastTitle = null;
     lastTooltip = null;
     lastMenuKey = null;
     iconState = null;
   };
 
-  return { update, destroy };
+  const setLocale = (nextLocale) => {
+    const normalized = normalizeMenuLocale(nextLocale);
+    if (locale === normalized) return;
+    locale = normalized;
+    if (lastSnapshot) update(lastSnapshot);
+  };
+
+  update({ sessions: [], approvals: [] });
+  return { update, destroy, setLocale };
 };

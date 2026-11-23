@@ -34,6 +34,7 @@ import { sharePagesI18n } from './share-pages.i18n';
 import { receivedPagesI18n } from './received-pages.i18n';
 import { memoryDreamingI18n } from './memory-dreaming.i18n';
 import { usageToolI18n } from './usage-tool.i18n';
+import { externalOpenCodePluginI18n } from './external-opencode-plugin.i18n';
 import { openchamberToolsLayoutI18n } from './openchamber-tools-layout.i18n';
 import { openchamberToolOutputI18n } from './openchamber-tool-output.i18n';
 import { opencodeToolOutputI18n } from './opencode-tool-output.i18n';
@@ -45,6 +46,7 @@ import { sidebarWorkI18n } from './sidebar-work.i18n';
 import { sidebarSectionsI18n } from './sidebar-sections.i18n';
 import { worktreeArchiveI18n } from './worktree-archive.i18n';
 import { operatorChildrenI18n } from './operator-children.i18n';
+import { leadI18n } from './lead.i18n';
 import { omniSearchI18n } from './omni-search.i18n';
 import { overviewI18n } from './overview.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
@@ -841,6 +843,7 @@ export const dict: Record<I18nKey, string> = {
   ...receivedPagesI18n.ru,
   ...memoryDreamingI18n.ru,
   ...usageToolI18n.ru,
+  ...externalOpenCodePluginI18n.ru,
   ...openchamberToolsLayoutI18n.ru,
   ...openchamberToolOutputI18n.ru,
   ...opencodeToolOutputI18n.ru,
@@ -852,6 +855,7 @@ export const dict: Record<I18nKey, string> = {
   ...sidebarSectionsI18n.ru,
   ...worktreeArchiveI18n.ru,
   ...operatorChildrenI18n.ru,
+  ...leadI18n.ru,
   ...omniSearchI18n.ru,
   ...overviewI18n.ru,
   ...isolatedSpacesI18n.ru,

@@ -2,21 +2,22 @@ import { expect, mock, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 
 let attachedMenu;
-let lastTooltip;
+let tooltip;
 class Tray extends EventEmitter {
   setIgnoreDoubleClickEvents() {}
   setImage() {}
   setTitle() {}
-  setToolTip(tooltip) { lastTooltip = tooltip; }
+  setToolTip(value) { tooltip = value; }
   setContextMenu(menu) { attachedMenu = menu; }
   destroy() {}
 }
 mock.module('electron', () => ({
   Tray,
-  Menu: { buildFromTemplate: () => new EventEmitter() },
+  Menu: { buildFromTemplate: (template) => Object.assign(new EventEmitter(), { template }) },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
-const { createTrayController } = await import('./tray.mjs');
+const { createTrayController, createTrayLocaleRouter } = await import('./tray.mjs');
+const { COMMANDS_SAFE_FOR_REMOTE, parseTrayLocale } = await import('./remote-page-policy.mjs');
 
 test('the native menu lifecycle reports each opening through the renderer action route', () => {
   const actions = [];
@@ -31,21 +32,51 @@ test('the native menu lifecycle reports each opening through the renderer action
   } finally { tray.destroy(); }
 });
 
-test('the tooltip follows the requested locale with correct plural forms', () => {
-  const snapshot = { sessions: [{ id: 's1', title: 'One', status: 'busy', unseen: 2, hasError: false, subtitle: '', directory: '' }], approvals: [{ id: 'a1' }] };
-  const tray = createTrayController({ idleIconPath: '', unseenIconPath: '', breathIconPaths: [], onAction: () => {} });
+test('changing locale rebuilds the current menu and tooltip without a new snapshot', () => {
+  const tray = createTrayController({ idleIconPath: '', unseenIconPath: '', breathIconPaths: [], onAction: () => {}, locale: 'en' });
   try {
-    tray.update(snapshot, 'en');
-    expect(lastTooltip).toBe('OpenChamber — 1 session · 1 awaiting approval, 1 working, 2 unread');
-    tray.update(snapshot, 'ru');
-    expect(lastTooltip).toBe('OpenChamber — 1 сессия · 1 ожидает подтверждения, 1 работает, 2 непрочитанные');
+    expect(tooltip).toBe('OpenChamber — no active sessions');
+    tray.setLocale('de');
+    expect(tooltip).toBe('OpenChamber — keine aktiven Sitzungen');
+    expect(attachedMenu.template.map((item) => item.label)).toContain('Keine aktiven Sitzungen');
+    tray.setLocale('xx');
+    expect(tooltip).toBe('OpenChamber — no active sessions');
+    tray.destroy();
+    tray.setLocale('de');
+    expect(tooltip).toBe('OpenChamber — no active sessions');
   } finally { tray.destroy(); }
 });
 
-test('the tooltip falls back to English for an unknown locale', () => {
-  const tray = createTrayController({ idleIconPath: '', unseenIconPath: '', breathIconPaths: [], onAction: () => {} });
+test('the tray starts in the preferred locale before the renderer sends a snapshot', () => {
+  const tray = createTrayController({ idleIconPath: '', unseenIconPath: '', breathIconPaths: [], onAction: () => {}, locale: 'de' });
   try {
-    tray.update({ sessions: [] }, 'xx');
-    expect(lastTooltip).toBe('OpenChamber — no active sessions');
+    expect(tooltip).toBe('OpenChamber — keine aktiven Sitzungen');
+    expect(attachedMenu.template.map((item) => item.label)).toContain('Keine aktiven Sitzungen');
+  } finally { tray.destroy(); }
+});
+
+test('only the window whose snapshot the tray shows relabels it, remote-served included', () => {
+  const tray = createTrayController({ idleIconPath: '', unseenIconPath: '', breathIconPaths: [], onAction: () => {}, locale: 'en' });
+  const router = createTrayLocaleRouter((locale) => tray.setLocale(locale));
+  const remoteMain = {};
+  const miniChat = {};
+  const invoke = (sender, command, args) => {
+    if (!COMMANDS_SAFE_FOR_REMOTE.has(command)) return 'rejected';
+    if (command === 'desktop_tray_update') { router.publish(sender); tray.update(args); }
+    if (command === 'desktop_set_tray_locale') router.setLocale(sender, parseTrayLocale(args.locale));
+    return null;
+  };
+  try {
+    expect(invoke(remoteMain, 'desktop_set_locale', { locale: 'de' })).toBe('rejected');
+    invoke(remoteMain, 'desktop_set_tray_locale', { locale: 'de' });
+    expect(tooltip).toBe('OpenChamber — no active sessions');
+    invoke(remoteMain, 'desktop_tray_update', { sessions: [], approvals: [] });
+    expect(tooltip).toBe('OpenChamber — keine aktiven Sitzungen');
+    invoke(miniChat, 'desktop_set_tray_locale', { locale: 'en' });
+    expect(tooltip).toBe('OpenChamber — keine aktiven Sitzungen');
+    expect(attachedMenu.template.map((item) => item.label)).toContain('Keine aktiven Sitzungen');
+    invoke(remoteMain, 'desktop_set_tray_locale', { locale: 'en' });
+    expect(tooltip).toBe('OpenChamber — no active sessions');
+    expect(attachedMenu.template.map((item) => item.label)).toContain('No active sessions');
   } finally { tray.destroy(); }
 });
