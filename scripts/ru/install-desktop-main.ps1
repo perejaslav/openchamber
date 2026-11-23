@@ -53,9 +53,10 @@
       only after proving it is both unpatched and version-matching; otherwise
       apply refuses instead of guessing.
     * Detection uses a sentinel string that exists only in the patched bundle
-      (the renderer-locale plumbing), plus SHA-256 of the three overlaid files.
-      A hash match proves the bytes are identical; it does not prove which
-      commit produced them, so the commit recorded in the marker is
+      (the fork's "Open in OpenChamber" context-menu wiring: the upstream
+      bundle has no openFolderContextMenu), plus SHA-256 of the three overlaid
+      files. A hash match proves the bytes are identical; it does not prove
+      which commit produced them, so the commit recorded in the marker is
       informational only.
     * Every run works in a unique staging directory that is removed afterwards.
       Reusing one directory across runs would let files deleted from a newer
@@ -74,7 +75,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Sentinel       = 'rendererLocale'
+$Sentinel       = 'openFolderContextMenu'
 $BundleFiles    = @('main.mjs', 'entry.mjs', 'early-startup.mjs')
 $MarkerName     = 'app.asar.ru-main-patch'
 $BackupVerName  = 'app.asar.orig.version'
