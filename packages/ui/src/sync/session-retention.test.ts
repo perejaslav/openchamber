@@ -6,10 +6,13 @@ import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from './session-ui-store';
+import { getSafeStorage } from '@/stores/utils/safeStorage';
 import { replaceGlobalSessionStatusById } from './global-session-status';
-import { buildSessionRetentionCandidates, runSessionRetentionCleanup, useSessionRetentionRunStore } from './session-retention';
+import { buildSessionRetentionCandidates, currentRetentionAbsences, recordRetentionRun, resetRetentionClock, inWorkKeepsSessions, isSessionKeptByUser, runSessionRetentionCleanup, useSessionRetentionRunStore } from './session-retention';
 
 const now = Date.now();
+const CLOCK_KEY = 'openchamber.sessionRetention.clock';
+const storedClock = () => JSON.parse(getSafeStorage().getItem(CLOCK_KEY) ?? 'null');
 const day = 86_400_000;
 const session = (id: string, patch: Partial<Session> = {}): Session => ({
   id, projectID: 'project', directory: '/retention-project', title: id, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -32,10 +35,14 @@ const seed = (sessions: Session[]) => useGlobalSessionsStore.getState().applySna
 
 beforeEach(() => {
   switchRuntimeEndpoint({ apiBaseUrl: 'https://retention.test', runtimeKey: 'retention-test' });
+  getSafeStorage().removeItem(CLOCK_KEY);
   useGlobalSessionsStore.getState().resetForRuntimeSwitch();
   useSessionUIStore.setState({ currentSessionId: null, isLoading: false });
   replaceGlobalSessionStatusById(new Map());
-  useUIStore.setState({ autoDeleteEnabled: true, autoDeleteAfterDays: 30, sessionRetentionAction: 'delete', sessionRetentionOnlyArchived: false, autoDeleteLastRunAt: 0 });
+  useUIStore.setState({
+    autoDeleteEnabled: true, autoDeleteAfterDays: 30, sessionRetentionAction: 'delete', sessionRetentionOnlyArchived: false, autoDeleteLastRunAt: 0,
+    sessionWorkEnabled: true, sessionRetentionIncludeInWork: false,
+  });
   spyOn(useGlobalSessionsStore.getState(), 'loadSessions').mockImplementation(async () => {
     const state = useGlobalSessionsStore.getState();
     return { activeSessions: state.activeSessions, archivedSessions: state.archivedSessions };
@@ -59,6 +66,22 @@ describe('retention eligibility', () => {
       sessions: [...recent, ...sessions], cutoffDays: 30, currentSessionId: 'current', action: 'delete',
       activeSessionIds: new Set(['busy']), now,
     })).toEqual(['old']);
+  });
+
+  test('keeps pinned sessions, and In work sessions while the In work block keeps them', () => {
+    const pinned = session('pinned', { metadata: { openchamber: { pinned: { at: 1 } } } });
+    const inWork = session('in-work', { metadata: { openchamber: { work: { state: 'open', openedAt: 1, openedBy: 'auto' } } } });
+    const doneWork = session('done-work', { metadata: { openchamber: { work: { state: 'done', openedAt: 1, openedBy: 'user', doneAt: 2 } } } });
+    const eligible = (workKeeps: boolean) => buildSessionRetentionCandidates({
+      sessions: [...recent, session('old'), pinned, inWork, doneWork], cutoffDays: 30, currentSessionId: null,
+      action: 'archive', activeSessionIds: new Set(), isKept: (item) => isSessionKeptByUser(item, new Set(), workKeeps), now,
+    }).sort();
+    expect(eligible(true)).toEqual(['done-work', 'old']);
+    expect(eligible(false)).toEqual(['done-work', 'in-work', 'old']);
+    expect(inWorkKeepsSessions({ sessionWorkEnabled: true, sessionRetentionIncludeInWork: false })).toBe(true);
+    expect(inWorkKeepsSessions({ sessionWorkEnabled: true, sessionRetentionIncludeInWork: true })).toBe(false);
+    // Without sessions in work nobody sees the block or can press Done.
+    expect(inWorkKeepsSessions({ sessionWorkEnabled: false, sessionRetentionIncludeInWork: false })).toBe(false);
   });
 
   test('protects every ancestor of a recent or archived child from cascade deletion', () => {
@@ -185,6 +208,22 @@ describe('retention execution', () => {
     expect(useGlobalSessionsStore.getState().entityById.has('parent')).toBe(true);
   });
 
+  test('takes In work sessions only while retention includes them, rechecked before each request', async () => {
+    const work = { metadata: { openchamber: { work: { state: 'open', openedAt: 1, openedBy: 'auto' } } } };
+    seed([session('first', work), session('second', work)]);
+    expect((await runSessionRetentionCleanup({ force: true })).skippedReason).toBe('no-candidates');
+
+    useUIStore.setState({ sessionRetentionIncludeInWork: true });
+    const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async () => {
+      useUIStore.setState({ sessionRetentionIncludeInWork: false });
+      return true;
+    });
+    const result = await runSessionRetentionCleanup({ force: true });
+    expect(result.completedIds).toHaveLength(1);
+    expect(result.failedIds).toEqual([]);
+    expect(remove.mock.calls).toHaveLength(1);
+  });
+
   test('stops at a runtime switch without reconciling the destination or its cooldown', async () => {
     seed([session('first'), session('second')]);
     const remove = spyOn(opencodeClient, 'deleteSession').mockImplementation(async () => {
@@ -249,6 +288,14 @@ describe('archived-only retention', () => {
     ])).toEqual(['old-archive']);
   });
 
+  test('deletes archived sessions whose metadata still carries open work, which no block lists', () => {
+    const staleWork = archived('stale-work', { metadata: { openchamber: { work: { state: 'open', openedAt: 1, openedBy: 'auto' } } } });
+    expect(buildSessionRetentionCandidates({
+      sessions: [...recentArchived, staleWork], cutoffDays: 30, currentSessionId: null,
+      action: 'delete', onlyArchived: true, activeSessionIds: new Set(), isKept: (item) => isSessionKeptByUser(item, new Set(), true), now,
+    })).toEqual(['stale-work']);
+  });
+
   test('preserves the five most recently archived sessions even when all are expired', () => {
     const sessions = Array.from({ length: 7 }, (_, index) => archived(`archived-${index}`, {
       time: { created: 1, updated: now, archived: now - (40 + index) * day },
@@ -308,5 +355,104 @@ describe('archived-only retention', () => {
     expect(remove.mock.calls).toHaveLength(1);
     expect(useGlobalSessionsStore.getState().entityById.has('parent')).toBe(true);
     expect(useGlobalSessionsStore.getState().entityById.has('restored')).toBe(true);
+  });
+});
+
+describe('time away from the app', () => {
+  const week = 7 * day;
+  // The user worked on these an hour before the last run, then closed the app for a week.
+  const beforeLeaving = now - week - 60 * 60_000;
+  const modes = [
+    { name: 'delete', action: 'delete', onlyArchived: false },
+    { name: 'archive', action: 'archive', onlyArchived: false },
+    { name: 'archived-only delete', action: 'delete', onlyArchived: true },
+  ] as const;
+  const at = (timestamp: number, onlyArchived: boolean, id: string) => onlyArchived
+    ? archived(id, { time: { created: 1, updated: 2, archived: timestamp } })
+    : session(id, { time: { created: 1, updated: timestamp } });
+  const runFor = (mode: (typeof modes)[number]) => {
+    const keep = mode.onlyArchived ? recentArchived : recent;
+    seed([...keep, ...['work-1', 'work-2'].map((id) => at(beforeLeaving, mode.onlyArchived, id)), at(now - 12 * day, mode.onlyArchived, 'stale')]);
+    useUIStore.setState({
+      autoDeleteAfterDays: 3, autoDeleteLastRunAt: now - week,
+      sessionRetentionAction: mode.action, sessionRetentionOnlyArchived: mode.onlyArchived,
+    });
+    spyOn(opencodeClient, 'deleteSession').mockResolvedValue(true);
+    spyOn(sessionRoutes, 'requestSessionArchiveBatch').mockImplementation(async (_directory, ids) => ({
+      outcome: 'archived', archived: ids.map((id) => ({ id, archivedAt: Date.now() })), failedIds: [],
+    }));
+  };
+
+  for (const mode of modes) {
+    test(`does not count the week away for ${mode.name}, and keeps not counting it on later days`, async () => {
+      const clock = spyOn(Date, 'now').mockImplementation(() => now);
+      runFor(mode);
+      expect((await runSessionRetentionCleanup()).completedIds).toEqual(['stale']);
+
+      // The last run before leaving credited one day of use, so the work had 1 day 1 hour then.
+      // Back in daily use, the next day keeps it at 2 days; the day after passes the 3-day period.
+      clock.mockImplementation(() => now + day + 60_000);
+      expect((await runSessionRetentionCleanup()).skippedReason).toBe('no-candidates');
+      clock.mockImplementation(() => now + 2 * day + 2 * 60_000);
+      expect((await runSessionRetentionCleanup()).completedIds.sort()).toEqual(['work-1', 'work-2']);
+    });
+  }
+
+  test('a device without history starts the clock instead of cleaning, unless cleanup was just turned on here', async () => {
+    spyOn(Date, 'now').mockImplementation(() => now);
+    runFor(modes[0]);
+    useUIStore.setState({ autoDeleteLastRunAt: null });
+    expect((await runSessionRetentionCleanup()).skippedReason).toBe('no-history');
+    expect(storedClock()).toEqual({ lastRunAt: now, absences: [] });
+    expect(useGlobalSessionsStore.getState().entityById.has('work-1')).toBe(true);
+
+    resetRetentionClock();
+    useUIStore.setState({ autoDeleteLastRunAt: null });
+    expect((await runSessionRetentionCleanup()).completedIds.sort()).toEqual(['stale', 'work-1', 'work-2']);
+  });
+
+  test('a manual run excludes the same time as the automatic one', async () => {
+    runFor(modes[0]);
+    expect((await runSessionRetentionCleanup({ force: true })).completedIds).toEqual(['stale']);
+  });
+
+  test('counts plain wall time while automatic cleanup is off, as the preview does', async () => {
+    runFor(modes[0]);
+    useUIStore.setState({ autoDeleteEnabled: false });
+    const result = await runSessionRetentionCleanup({ force: true });
+    expect(result.completedIds.sort()).toEqual(['stale', 'work-1', 'work-2']);
+    expect(storedClock()).toEqual({ lastRunAt: null, absences: [] });
+  });
+
+  test('records nothing for a first run or a run within the interval', () => {
+    expect(currentRetentionAbsences({ storedLastRunAt: null, cutoffDays: 3, now })).toEqual([]);
+    expect(currentRetentionAbsences({ storedLastRunAt: now - day + 1, cutoffDays: 3, now })).toEqual([]);
+    expect(currentRetentionAbsences({ storedLastRunAt: now - week, cutoffDays: 3, now })).toEqual([[now - 6 * day, now]]);
+  });
+
+  test('a tab with an older view adds to the stored history instead of replacing it', () => {
+    recordRetentionRun({ ranAt: now - 2 * day, absences: [[now - 9 * day, now - 4 * day]], cutoffDays: 3 });
+    recordRetentionRun({ ranAt: now - 3 * day, absences: [[now - 5 * day, now - 3.5 * day]], cutoffDays: 3 });
+    expect(storedClock()).toEqual({ lastRunAt: now - 2 * day, absences: [[now - 9 * day, now - 3.5 * day]] });
+    // The stored last run wins over the store's stale one; the day past its interval is away too.
+    expect(currentRetentionAbsences({ storedLastRunAt: now - week, cutoffDays: 3, now }))
+      .toEqual([[now - 9 * day, now - 3.5 * day], [now - day, now]]);
+  });
+
+  test('a tab with an older view neither reruns inside the cooldown nor trims a newer absence', async () => {
+    spyOn(Date, 'now').mockImplementation(() => now);
+    runFor(modes[0]);
+    await runSessionRetentionCleanup();
+    useUIStore.setState({ autoDeleteLastRunAt: now - week });
+    expect((await runSessionRetentionCleanup()).skippedReason).toBe('cooldown');
+    recordRetentionRun({ ranAt: now - day, absences: [], cutoffDays: 3 });
+    expect(storedClock().absences).toEqual([[now - 6 * day, now]]);
+  });
+
+  test('ignores unreadable stored history and drops absences behind the cutoff', () => {
+    getSafeStorage().setItem(CLOCK_KEY, JSON.stringify({ lastRunAt: 'junk', absences: [[null, '1e400']] }));
+    expect(currentRetentionAbsences({ storedLastRunAt: now - 2 * day, cutoffDays: 3, now })).toEqual([[now - day, now]]);
+    recordRetentionRun({ ranAt: now, absences: [[now - 40 * day, now - 39 * day], [now - 2 * day, now - day]], cutoffDays: 3 });
+    expect(storedClock().absences).toEqual([[now - 2 * day, now - day]]);
   });
 });

@@ -12,7 +12,9 @@ const originalLoadSessions = useGlobalSessionsStore.getState().loadSessions;
 const entry: SpaceEntry = {
   id: ID,
   name: 'Fix login',
+  placeId: 'docker', machine: null,
   projectDirectory: '/home/me/app',
+  projectFolder: { path: '/home/me/app', found: true },
   directory: `/spaces/${ID}/app`,
   state: 'running',
   stoppedIdle: false,
@@ -22,6 +24,7 @@ const entry: SpaceEntry = {
   grants: [],
   access: null,
   needsAccess: [],
+  accessFailures: [],
   damage: null,
   setup: null,
 };

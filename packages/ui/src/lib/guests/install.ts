@@ -1,10 +1,13 @@
 import type { GuestCapability } from '@openchamber/sdk';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { z } from 'zod';
 
-import { parseInstalledGuestJson } from './parse.ts';
+import { parseInstallAnswerJson } from './parse.ts';
 import type { InstalledGuest } from './types.ts';
 import type { GuestRequestFailure } from './request-failure.ts';
+import { removeDeviceGuestStorage } from './device-storage.ts';
+import { useGuestsStore } from './store.ts';
 
 const errorSchema = z.object({
   error: z.enum([
@@ -15,16 +18,20 @@ const errorSchema = z.object({
     'id-taken',
     'already-installed',
     'missing-build',
+    'invalid-opencode-plugin',
     'host-too-old',
     'bundled',
     'reserved-id',
     'clone-failed',
+    'clone-auth-failed',
     'extract-failed',
     'too-large',
     'enterprise-mode',
+    'invalid-folders',
   ]),
   required: z.string().trim().min(1).max(64).optional(),
   id: z.string().trim().min(1).max(128).optional(),
+  reason: z.string().trim().min(1).max(1000).optional(),
 });
 
 export type InstallGuestErrorCode =
@@ -35,24 +42,28 @@ export type InstallGuestErrorCode =
   | 'id-taken'
   | 'already-installed'
   | 'missing-build'
+  | 'invalid-opencode-plugin'
   | 'host-too-old'
   | 'bundled'
   | 'reserved-id'
   | 'clone-failed'
+  | 'clone-auth-failed'
   | 'extract-failed'
   | 'too-large'
   | 'enterprise-mode'
+  | 'invalid-folders'
+  | 'unreadable'
   | 'failed';
 
 type InstallGuestResult =
   | { ok: true; guest: InstalledGuest; replaced?: boolean }
-  | { ok: false; code: InstallGuestErrorCode; required?: string; id?: string; diagnostic?: GuestRequestFailure };
+  | { ok: false; code: InstallGuestErrorCode; required?: string; id?: string; reason?: string; diagnostic?: GuestRequestFailure };
 
 type UninstallGuestResult =
   | { ok: true }
   | { ok: false; code: InstallGuestErrorCode };
 
-type InstallGuestRequest = ({ path: string } | { url: string }) & { replace?: boolean; gitIdentityId?: string };
+type InstallGuestRequest = ({ path: string } | { url: string }) & { replace?: boolean; gitIdentityId?: string; folders?: string[] };
 
 type ParseInstallInputResult =
   | { ok: true; request: InstallGuestRequest }
@@ -81,7 +92,7 @@ export const parseInstallInput = (raw: string): ParseInstallInputResult => {
 
 const readInstallError = async (
   response: Response,
-): Promise<{ code: InstallGuestErrorCode; required?: string; id?: string }> => {
+): Promise<{ code: InstallGuestErrorCode; required?: string; id?: string; reason?: string }> => {
   try {
     const parsed = errorSchema.safeParse(JSON.parse(await response.text()));
     if (!parsed.success) {
@@ -96,15 +107,19 @@ const readInstallError = async (
     if (parsed.data.id) {
       return { code: parsed.data.error, id: parsed.data.id };
     }
+    if (parsed.data.error === 'invalid-manifest' && parsed.data.reason) {
+      return { code: 'invalid-manifest', reason: parsed.data.reason };
+    }
     return { code: parsed.data.error };
   } catch {
     return { code: 'failed' };
   }
 };
 
-export type InstallGuestOptions = {
+type InstallGuestOptions = {
   replace?: boolean;
   gitIdentityId?: string;
+  folders?: readonly string[] | undefined;
 };
 
 const readInstallResponse = async (response: Response, path: GuestRequestFailure['path']): Promise<InstallGuestResult> => {
@@ -113,7 +128,10 @@ const readInstallResponse = async (response: Response, path: GuestRequestFailure
     return { ok: false, ...error, diagnostic: { method: 'POST', path, kind: 'http', status: response.status } };
   }
   const content = await response.text().catch(() => null);
-  const guest = content === null ? null : parseInstalledGuestJson(content);
+  const guest = content === null ? null : parseInstallAnswerJson(content);
+  if (guest === 'unreadable') {
+    return { ok: false, code: 'unreadable' };
+  }
   if (!guest) {
     return { ok: false, code: 'failed', diagnostic: { method: 'POST', path, kind: 'invalid-response', status: response.status } };
   }
@@ -131,6 +149,7 @@ export const installGuest = async (
   const body: InstallGuestRequest = { ...parsed.request };
   if (options.replace) body.replace = true;
   if ('url' in body && options.gitIdentityId) body.gitIdentityId = options.gitIdentityId;
+  if (options.folders) body.folders = [...options.folders];
   try {
     const response = await runtimeFetch('/api/guests', {
       method: 'POST',
@@ -143,12 +162,6 @@ export const installGuest = async (
   }
 };
 
-/**
- * Send a `.zip` picked or dropped in the browser to the host. Same result
- * shape as `installGuest`, so one flow handles both; the archive travels as a
- * raw octet-stream body over `runtimeFetch`, which is what the files tree
- * upload uses too, so relay and tunnel runtimes carry it unchanged.
- */
 export const uploadGuestZip = async (
   file: File,
   options: InstallGuestOptions = {},
@@ -159,6 +172,7 @@ export const uploadGuestZip = async (
       query: {
         replace: options.replace ? 'true' : undefined,
         name: file.name || undefined,
+        folders: options.folders ? JSON.stringify(options.folders) : undefined,
       },
       headers: { 'Content-Type': 'application/octet-stream', Accept: 'application/json' },
       body: file,
@@ -170,9 +184,18 @@ export const uploadGuestZip = async (
 };
 
 export const uninstallGuest = async (id: string): Promise<UninstallGuestResult> => {
+  const catalog = useGuestsStore.getState();
+  const runtimeKey = getRuntimeKey();
+  const storageId = catalog.runtimeKey === runtimeKey
+    ? catalog.guests.find((guest) => guest.id === id)?.storageId : undefined;
   try {
     const response = await runtimeFetch(`/api/guests/${id}`, { method: 'DELETE' });
     if (response.status === 204) {
+      if (storageId && globalThis.indexedDB) {
+        await removeDeviceGuestStorage({ runtimeKey, guestId: id, storageId }).catch(() => {
+          console.warn('Could not clear local extension preferences.');
+        });
+      }
       return { ok: true };
     }
     const error = await readInstallError(response);
@@ -195,7 +218,19 @@ export const setGuestEnabled = async (id: string, enabled: boolean): Promise<boo
   }
 };
 
-/** Record the user's answer to the approval dialog. An empty list withdraws approval. */
+export const setGuestFolders = async (id: string, folders: readonly string[]): Promise<boolean> => {
+  try {
+    const response = await runtimeFetch(`/api/guests/${id}/folders`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folders }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
 export const approveGuestCapabilities = async (id: string, granted: readonly GuestCapability[]): Promise<boolean> => {
   try {
     const response = await runtimeFetch(`/api/guests/${id}/capabilities`, {

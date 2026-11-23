@@ -1,7 +1,10 @@
+import { readEnterprisePolicy } from '../../web/server/lib/enterprise-mode.js';
+import { resolveNpmRegistryRequest } from '../../web/server/lib/npm/npm-registry-config.js';
+
 type UpgradeCapability = {
   supported: boolean;
-  manager: 'opencode' | 'external' | 'openchamber' | null;
-  reason: 'external' | 'unavailable' | null;
+  manager: 'opencode' | 'external' | 'openchamber' | 'administrator' | null;
+  reason: 'external' | 'unavailable' | 'policy' | null;
 };
 
 export type OpenCodeUpgradeManager = {
@@ -42,6 +45,7 @@ const compareVersions = (left: unknown, right: unknown): number => {
 const getCapability = (manager?: OpenCodeUpgradeManager): UpgradeCapability => {
   if (!manager) return { supported: false, manager: null, reason: 'unavailable' };
   if (manager.getDebugInfo().mode !== 'managed') return { supported: false, manager: 'external', reason: 'external' };
+  if (readEnterprisePolicy().opencodeBinary) return { supported: false, manager: 'administrator', reason: 'policy' };
   if (!manager.getApiUrl() || !manager.getDebugInfo().cliPath) return { supported: false, manager: null, reason: 'unavailable' };
   return { supported: true, manager: 'opencode', reason: null };
 };
@@ -51,11 +55,10 @@ const getApiUrl = (manager?: OpenCodeUpgradeManager): string | null => {
   return apiUrl ? `${apiUrl.replace(/\/+$/, '')}/` : null;
 };
 
-// OpenCode 2.x publishes as `@opencode/cli` on npm and has no GitHub release
-// assets, so the registry is the one source of "latest".
 const fetchLatestVersion = async (): Promise<string> => {
-  const response = await fetch('https://registry.npmjs.org/@opencode%2Fcli/latest', {
-    headers: { Accept: 'application/json' },
+  const request = resolveNpmRegistryRequest('@opencode/cli', 'latest');
+  const response = await fetch(request.url, {
+    headers: { Accept: 'application/json', ...request.headers },
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`OpenCode npm registry responded with ${response.status}`);
@@ -70,11 +73,9 @@ const fetchLatestVersion = async (): Promise<string> => {
 export const getOpenCodeUpgradeStatus = async (manager?: OpenCodeUpgradeManager): Promise<Record<string, unknown>> => {
   const upgrade = getCapability(manager);
   const apiUrl = getApiUrl(manager);
-  // External runtimes still report their version without offering an upgrade.
   if (!apiUrl || !manager) return { available: false, currentVersion: null, latestVersion: null, upgrade };
   try {
     const [healthResponse, latestVersion] = await Promise.all([
-      // OpenCode 2.0.8 replaced `/api/health` with `/api/info`.
       fetch(new URL('/api/info', apiUrl).toString(), { method: 'GET', headers: { Accept: 'application/json', ...manager.getOpenCodeAuthHeaders() } }),
       fetchLatestVersion(),
     ]);
@@ -84,6 +85,7 @@ export const getOpenCodeUpgradeStatus = async (manager?: OpenCodeUpgradeManager)
       return { available: null, error, upgrade };
     }
     const currentVersion = typeof health?.version === 'string' && health.version.trim() ? health.version.trim().replace(/^v/, '') : null;
+    if (upgrade.reason === 'policy') return { available: false, currentVersion, latestVersion, upgrade };
     return { available: currentVersion ? compareVersions(latestVersion, currentVersion) > 0 : null, currentVersion, latestVersion, upgrade };
   } catch (error) {
     return { available: null, error: error instanceof Error ? error.message : String(error), upgrade };

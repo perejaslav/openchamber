@@ -8,6 +8,8 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 import { restartDesktopApp } from '@/lib/desktop';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import { useEnterprisePolicyStore } from '@/stores/useEnterprisePolicyStore';
+import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 
 const INSTALL_COMMAND = 'curl -fsSL https://opencode.ai/v2/install | bash';
 const WINDOWS_INSTALL_COMMAND = 'npm install -g @opencode/cli';
@@ -16,20 +18,16 @@ const DOCS_URL = 'https://opencode.ai/download';
 type OnboardingPlatform = 'macos' | 'linux' | 'windows' | 'unknown';
 
 type LocalSetupScreenProps = {
-  /** Callback when user goes back */
   onBack: () => void;
-  /** Callback when CLI becomes available */
   onCliAvailable?: () => void;
-  /** Whether this screen was entered from recovery flow (shows "Connect to Remote" link) */
   isFromRecovery?: boolean;
-  /** Callback when user wants to switch to remote */
   onSwitchToRemote?: () => void;
 };
 
 function InstallCommand({ windows, onCopy, copyTitle }: { windows: boolean; onCopy: () => void; copyTitle: string }) {
   return (
     <div className="flex items-center justify-center gap-3">
-      <code className="flex-1 min-w-0 text-left overflow-x-auto whitespace-nowrap">
+      <ScrollableOverlay as="code" outerClassName="overlay-scrollbar-wrapper--no-gutter flex-1 min-w-0" fillContainer={false} className="text-start whitespace-nowrap">
         {windows ? (
           <span style={{ color: 'var(--syntax-keyword)' }}>{WINDOWS_INSTALL_COMMAND}</span>
         ) : (
@@ -41,7 +39,7 @@ function InstallCommand({ windows, onCopy, copyTitle }: { windows: boolean; onCo
             <span style={{ color: 'var(--syntax-keyword)' }}>bash</span>
           </>
         )}
-      </code>
+      </ScrollableOverlay>
       <button
         onClick={onCopy}
         className="inline-flex items-center text-muted-foreground hover:text-foreground transition-colors"
@@ -70,6 +68,7 @@ export function LocalSetupScreen({
   const [isChecking, setIsChecking] = React.useState(false);
   const [checkError, setCheckError] = React.useState<string | null>(null);
   const [opencodeBinary, setOpencodeBinary] = React.useState('');
+  const pinnedBinary = useEnterprisePolicyStore((state) => state.opencodeBinary);
   const [platform, setPlatform] = React.useState<OnboardingPlatform>('unknown');
 
   React.useEffect(() => {
@@ -166,8 +165,6 @@ export function LocalSetupScreen({
     try {
       await updateDesktopSettings({ opencodeBinary: opencodeBinary.trim() });
 
-      // In desktop boot flow, restart the app so the native host can
-      // re-evaluate the boot outcome with the updated binary path.
       if (isDesktopApp) {
         await restartDesktopApp();
         return;
@@ -195,7 +192,6 @@ export function LocalSetupScreen({
     try {
       const available = await checkCliAvailability();
       if (available) {
-        // CLI is available, proceed to main screen
         onCliAvailable?.();
       } else {
         setCheckError(t('onboarding.localSetup.errors.cliNotReady'));
@@ -241,9 +237,9 @@ export function LocalSetupScreen({
         </div>
 
         {platform === 'windows' && (
-          <div className="mx-auto max-w-2xl rounded-lg border border-border bg-background/50 p-4 text-left">
+          <div className="mx-auto max-w-2xl rounded-lg border border-border bg-background/50 p-4 text-start">
             <div className="text-sm text-foreground">{t('onboarding.localSetup.windows.title')}</div>
-            <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+            <ol className="mt-2 list-decimal space-y-1 ps-5 text-sm text-muted-foreground">
               <li>{t('onboarding.localSetup.windows.stepRunInstallInWsl')}</li>
               <li>{t('onboarding.localSetup.windows.stepSetBinaryPath')}</li>
             </ol>
@@ -300,29 +296,35 @@ export function LocalSetupScreen({
             <div className="text-sm text-muted-foreground">{t('onboarding.localSetup.field.alreadyInstalled')}</div>
             <div className="flex gap-2">
               <Input
-                value={opencodeBinary}
+                value={pinnedBinary ?? opencodeBinary}
                 onChange={(e) => setOpencodeBinary(e.target.value)}
                 placeholder={binaryPlaceholder}
-                disabled={isRetrying}
+                disabled={isRetrying || pinnedBinary !== null}
                 className="flex-1 font-mono text-xs"
               />
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handleBrowse}
-                disabled={isRetrying || !isDesktopApp}
-              >
-                {t('onboarding.localSetup.actions.browse')}
-              </Button>
-              <Button
-                type="button"
-                onClick={handleApplyPath}
-                disabled={isRetrying}
-              >
-                {t('onboarding.localSetup.actions.apply')}
-              </Button>
+              {pinnedBinary === null && (
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={handleBrowse}
+                    disabled={isRetrying || !isDesktopApp}
+                  >
+                    {t('onboarding.localSetup.actions.browse')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleApplyPath}
+                    disabled={isRetrying}
+                  >
+                    {t('onboarding.localSetup.actions.apply')}
+                  </Button>
+                </>
+              )}
             </div>
-            <div className="text-xs text-muted-foreground/70">{t('onboarding.localSetup.helper.saveAndReload')}</div>
+            <div className="text-xs text-muted-foreground">
+              {t(pinnedBinary === null ? 'onboarding.localSetup.helper.saveAndReload' : 'onboarding.localSetup.helper.pinnedByAdministrator')}
+            </div>
           </div>
         </div>
 
@@ -342,22 +344,22 @@ export function LocalSetupScreen({
       </div>
 
       {showHint && (
-        <div className="absolute bottom-8 left-0 right-0 text-center space-y-1">
+        <div className="absolute bottom-8 inset-s-0 inset-e-0 text-center space-y-1">
           {platform === 'windows' ? (
             <>
-              <p className="text-sm text-muted-foreground/70">
+              <p className="text-sm text-muted-foreground">
                 {t('onboarding.localSetup.windows.hintDetectionFailed')}
               </p>
             </>
           ) : (
             <>
-              <p className="text-sm text-muted-foreground/70">
+              <p className="text-sm text-muted-foreground">
                 {t('onboarding.localSetup.hint.ensurePath')}
               </p>
-              <p className="text-sm text-muted-foreground/70">
+              <p className="text-sm text-muted-foreground">
                 {t('onboarding.localSetup.hint.setEnv')}
               </p>
-              <p className="text-sm text-muted-foreground/70">
+              <p className="text-sm text-muted-foreground">
                 {t('onboarding.localSetup.hint.missingRuntime')}
               </p>
             </>

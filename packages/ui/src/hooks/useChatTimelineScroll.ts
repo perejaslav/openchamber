@@ -2,9 +2,34 @@ import React from 'react';
 
 import { MessageFreshnessDetector } from '@/lib/messageFreshness';
 import { createScrollSpy } from '@/components/chat/lib/scroll/scrollSpy';
+import { cancelWhenLayoutSettled, isLayoutAnimating, onLayoutAnimationStart, onWidthDragStart, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import { createKeyboardFollowGlide, type KeyboardFollowGlide } from '@/components/chat/lib/scroll/keyboardFollowGlide';
+import { createFollowGlide, type FollowGlide } from '@/components/chat/lib/scroll/followGlide';
 import { retireScrollContent } from '@/components/chat/lib/scroll/retireScrollContent';
-import { useViewportStore } from '@/sync/viewport-store';
+import {
+    ANCHOR_HOLD_MAX_FRAMES,
+    ANCHOR_HOLD_STABLE_FRAMES,
+    captureMessageViewportAnchor,
+    type MessageViewportAnchor,
+    type ViewportAnchorAlignment,
+} from '@/components/chat/lib/scroll/messageViewportAnchor';
+import { readSessionScrollPosition, rememberOutgoingSessionScrollPosition } from '@/components/chat/lib/scroll/sessionScrollMemory';
+import {
+    isWaitingPageRevealPending,
+    pendingWaitingPageID,
+    releaseWaitingPageRevealOutside,
+    subscribeRequestReveal,
+    takeWaitingPageReveal,
+} from '@/sync/request-reveal';
+import {
+    peekMessageFocus,
+    releaseMessageFocusOutside,
+    settleMessageFocus,
+    subscribeMessageFocus,
+    markMessageFocusShown,
+    type MessageFocusRequest,
+} from '@/lib/router/messageFocus';
+import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { useUIStore } from '@/stores/useUIStore';
 import type { TimelineRevealGate } from '@/components/chat/timelineRevealGate';
 import {
@@ -16,38 +41,26 @@ import {
     type TimelineScrollMode,
 } from '@/components/chat/lib/scroll/timelineScrollAnchoring';
 import {
+    resolveFollowGlideTarget,
+    resolveFollowStop,
+    resolvePageRevealTarget,
+} from '@/components/chat/lib/scroll/followScroll';
+import {
     isFollowReleaseKey,
     isMiddleButtonPan,
     nestedScrollableConsumesWheelUp,
+    onFrameScroll,
+    dispatchPageWaiting,
+    findWaitingPage,
+    onPageWaiting,
+    onRowExpand,
+    onTabStep,
 } from '@/components/chat/lib/scroll/timelineScrollIntent';
 
-// ──────────────────────────────────────────────────────────────────────────
-// Chat timeline scroll ownership.
-//
-// The virtualized list owns the scroll position; this hook only decides which
-// of two mutually exclusive modes is active and, when a mode calls for it,
-// issues ONE deterministic scroll command:
-//
-//   • `following-end`      — pinned to the live edge. The list keeps us there
-//     through `maintainScrollAtEnd`; we only re-assert after a data change.
-//   • `free-scrolling`     — the user took over. Nothing moves until they opt
-//     back in by returning to the end.
-//
-// Opting out of automatic movement is driven by REAL gestures (wheel /
-// touchmove / pointerdown), not by inferring intent from scroll positions. Each
-// gesture bumps a generation counter; any in-flight automatic movement compares
-// its captured generation against the current one and aborts if they differ.
-// That comparison replaces the timer windows the previous implementation needed
-// to tell its own writes apart from the user's, which is why there are no
-// guard/settle/entry-stick timers here.
-// ──────────────────────────────────────────────────────────────────────────
-
-// The subset of the list ref this hook drives. Declared structurally so the
-// hook stays testable without a renderer and does not hard-depend on the list
-// implementation.
 export interface TimelineListHandle {
     getState: () => TimelineListMeasurementState & {
         readonly scroll: number;
+        readonly contentLength?: number;
         readonly listen?: (
             listenerType: 'totalSize',
             callback: (value: number) => void,
@@ -64,115 +77,252 @@ export interface TimelineListHandle {
     }) => unknown;
 }
 
+export type LinkedMessageState = 'exists' | 'missing' | 'unknown';
+
+interface TimelineAnchorHandle {
+    alignViewportAnchor: (anchor: MessageViewportAnchor) => ViewportAnchorAlignment;
+}
+
 interface UseChatTimelineScrollOptions {
     currentSessionId: string | null;
     currentSessionKey: string | null;
-    sessionMessageCount: number;
     composerOverlayHeight: number;
-    // True while the session is producing output. Follow corrections glide
-    // only then. Outside a live stream — entering a session, a tab becoming
-    // active, rows re-measuring after a switch — the viewport must land on
-    // the end instantly: an animated catch-up scrolls visibly through the
-    // conversation and gets cut short by the next measurement.
+    messageListRef: React.RefObject<TimelineAnchorHandle | null>;
+    loadHistoryUntilMessage?: (messageId: string, maxBatches: number) => Promise<boolean>;
+    checkLinkedMessage?: (messageId: string) => Promise<LinkedMessageState>;
+    onLinkedMessageMissing?: () => void;
     sessionIsWorking: boolean;
-    // Reveal gate of the session being opened. Held until the viewport is
-    // pinned to the end, so the session is never shown scrolled to the top.
+    pinned?: boolean;
     revealGate?: TimelineRevealGate | null;
     onActiveTurnChange?: (turnId: string | null) => void;
 }
 
-
-
-export interface UseChatTimelineScrollResult {
+interface UseChatTimelineScrollResult {
     scrollRef: React.RefObject<HTMLDivElement | null>;
-    // The live scroll element, as state, so effects that must re-bind when the
-    // list remounts (session switch) can depend on it.
     scrollNode: HTMLDivElement | null;
     isPinned: boolean;
-    registerList: (list: TimelineListHandle | null) => void;
+    registerList: (list: TimelineListHandle | null, sessionKey?: string) => void;
+    captureOutgoingPosition: () => void;
     onIsAtEndChange: (isAtEnd: boolean) => void;
-    onListMetricsChange: (metrics: { readonly footerSize: number }) => void;
+    onListMetricsChange: (metrics: { readonly headerSize: number; readonly footerSize: number }) => void;
     onManualNavigation: () => void;
     onTimelineDataChange: () => void;
     showScrollButton: boolean;
-    /** A real gesture took the scroll; flips back on any explicit opt-in. */
     userOwnsScroll: boolean;
-    /**
-     * The viewport sits within the re-arm band of the content end, measured
-     * from the scroll position on every scroll event rather than from the
-     * list's at-end transitions (which follow logic may swallow). For
-     * chrome that mirrors the reader's actual position, like the recap hint.
-     */
-    viewportAtEnd: boolean;
+    nearContentStart: boolean;
     isFollowingProgrammatically: boolean;
     goToBottom: (mode?: 'instant' | 'smooth') => void;
     scrollToBottomOnSend: () => void;
-    saveSnapshotNow: () => void;
     restoreSnapshot: () => Promise<boolean>;
 }
 
-// Showing the pill is debounced so it does not flash while a thread switch
-// settles (the list reports isAtEnd=false until its initial end-scroll lands).
-// Hiding is always immediate.
 const SHOW_SCROLL_BUTTON_DELAY_MS = 150;
-const SAVE_DEBOUNCE_MS = 150;
+const ANIMATION_END_CORRECTION_MAX_PX = 64;
+const REMEMBERED_POSITION_REVEAL_WAIT_MS = 800;
+const REMEMBERED_POSITION_HISTORY_BATCHES = 3;
+const MESSAGE_LINK_GAP_PX = 12;
+const MESSAGE_LINK_HIGHLIGHT_MS = 1200;
+const REPLY_START_GAP_PX = 16;
+const SEND_GLIDE_WINDOW_MS = 2000;
+const TURN_END_GLIDE_WINDOW_MS = 1000;
+const LOAD_OLDER_REACH_VIEWPORTS = 2;
+const PAGE_REVEAL_SETTLE_MS = 1500;
+const FOLLOW_LANDING_SNAP_MAX_PX = 4;
+
+let reducedMotionQuery: MediaQueryList | null | undefined;
+const prefersReducedMotion = (): boolean => {
+    if (reducedMotionQuery === undefined) {
+        const browserWindow = globalThis.window;
+        reducedMotionQuery = browserWindow?.matchMedia
+            ? browserWindow.matchMedia('(prefers-reduced-motion: reduce)')
+            : null;
+    }
+    return reducedMotionQuery?.matches === true;
+};
+const followScrollBehavior = (): ScrollBehavior => (prefersReducedMotion() ? 'auto' : 'smooth');
+const drawsScrollInWholePixels = (): boolean => (
+    globalThis.CSS?.supports?.('-webkit-touch-callout', 'none') === true
+);
+
+const messageLinkOffsetTop = (node: HTMLElement): number => {
+    const fade = Number.parseFloat(getComputedStyle(node).getPropertyValue('--scroll-shadow-size'));
+    return (Number.isFinite(fade) ? fade : 0) + MESSAGE_LINK_GAP_PX;
+};
+
+const lastMatch = (node: HTMLElement, selector: string): HTMLElement | null => {
+    const matches = node.querySelectorAll<HTMLElement>(selector);
+    return matches[matches.length - 1] ?? null;
+};
+
+interface FollowStop {
+    readonly element: HTMLElement;
+    readonly limit: number;
+    readonly bottom: number;
+}
+
+const turnIdOf = (element: HTMLElement): string | undefined => (
+    element.closest<HTMLElement>('[data-turn-row]')?.dataset.turnRow
+        ?? element.closest<HTMLElement>('[data-turn-id]')?.dataset.turnId
+);
+
+const readFollowStop = (node: HTMLElement, element: HTMLElement): FollowStop => {
+    const rect = element.getBoundingClientRect();
+    const offset = node.scrollTop - node.getBoundingClientRect().top;
+    const turnId = turnIdOf(element);
+    const header = turnId
+        ? node.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(turnId)}"] > [data-turn-sticky-header]`)
+        : null;
+    const headerHeight = header ? header.getBoundingClientRect().height : 0;
+    return {
+        element,
+        limit: Math.max(0, rect.top + offset - headerHeight - REPLY_START_GAP_PX),
+        bottom: rect.bottom + offset,
+    };
+};
+
+const findLatestTurnId = (node: HTMLElement): string | undefined => {
+    let latest: HTMLElement | null = null;
+    let latestTop = Number.NEGATIVE_INFINITY;
+    for (const row of node.querySelectorAll<HTMLElement>('[data-turn-id], [data-turn-row]')) {
+        const top = row.getBoundingClientRect().top;
+        if (top > latestTop) {
+            latest = row;
+            latestTop = top;
+        }
+    }
+    return latest ? turnIdOf(latest) : undefined;
+};
+
+const findStreamingReply = (node: HTMLElement): HTMLElement | null => lastMatch(node, '[data-streaming-reply]');
+
+const findFollowStops = (node: HTMLElement, stopAfterUserMessage: boolean, reply: HTMLElement | null): FollowStop[] => {
+    const stops: FollowStop[] = [];
+    const turnId = stopAfterUserMessage ? findLatestTurnId(node) : undefined;
+    let work: HTMLElement | null = null;
+    let workBottom = Number.NEGATIVE_INFINITY;
+    if (turnId) {
+        for (const row of node.querySelectorAll<HTMLElement>(`[data-turn-row="${CSS.escape(turnId)}"]`)) {
+            const rect = row.getBoundingClientRect();
+            if (!work || rect.top < work.getBoundingClientRect().top) work = row;
+            workBottom = Math.max(workBottom, rect.bottom);
+        }
+    }
+    if (work) {
+        const stop = readFollowStop(node, work);
+        stops.push({ ...stop, bottom: workBottom + node.scrollTop - node.getBoundingClientRect().top });
+    }
+    if (reply) stops.push(readFollowStop(node, reply));
+    return stops;
+};
+
+type PositionTarget =
+    | { readonly kind: 'remembered'; readonly anchor: MessageViewportAnchor }
+    | { readonly kind: 'link'; readonly anchor: MessageViewportAnchor; readonly request: MessageFocusRequest };
+
+const linkTarget = (request: MessageFocusRequest, node: HTMLElement): PositionTarget => ({
+    kind: 'link',
+    request,
+    anchor: { messageId: request.messageId, offsetTop: messageLinkOffsetTop(node) },
+});
+
+const highlightLinkedMessage = (node: HTMLElement, messageId: string): void => {
+    const element = node.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+    if (!element) return;
+    element.setAttribute('data-message-link-target', '');
+    window.setTimeout(() => element.removeAttribute('data-message-link-target'), MESSAGE_LINK_HIGHLIGHT_MS);
+};
 
 export const useChatTimelineScroll = ({
     currentSessionId,
     currentSessionKey,
-    sessionMessageCount,
     composerOverlayHeight,
+    messageListRef,
+    loadHistoryUntilMessage,
+    checkLinkedMessage,
+    onLinkedMessageMissing,
     sessionIsWorking,
+    pinned = false,
     revealGate = null,
     onActiveTurnChange,
 }: UseChatTimelineScrollOptions): UseChatTimelineScrollResult => {
     const sessionIsWorkingRef = React.useRef(sessionIsWorking);
     sessionIsWorkingRef.current = sessionIsWorking;
+    const sendGlideUntilRef = React.useRef(0);
+    const turnEndGlideUntilRef = React.useRef(0);
+    const workingSessionRef = React.useRef({ key: currentSessionKey, working: sessionIsWorking });
+    React.useLayoutEffect(() => {
+        const previous = workingSessionRef.current;
+        workingSessionRef.current = { key: currentSessionKey, working: sessionIsWorking };
+        if (previous.key !== currentSessionKey) {
+            turnEndGlideUntilRef.current = 0;
+        } else if (previous.working && !sessionIsWorking) {
+            turnEndGlideUntilRef.current = performance.now() + TURN_END_GLIDE_WINDOW_MS;
+        }
+    }, [currentSessionKey, sessionIsWorking]);
+    const isTurnRunning = () => sessionIsWorkingRef.current || performance.now() < sendGlideUntilRef.current;
+    const isLive = () => isTurnRunning() || performance.now() < turnEndGlideUntilRef.current;
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const listRef = React.useRef<TimelineListHandle | null>(null);
 
     const [scrollNode, setScrollNode] = React.useState<HTMLDivElement | null>(null);
     const [showScrollButton, setShowScrollButton] = React.useState(false);
-    // "Pinned" is the live edge, which history pagination uses to decide whether
-    // it may load older pages without disturbing the read position.
     const [isPinned, setIsPinned] = React.useState(true);
     const [isFollowingProgrammatically, setIsFollowingProgrammatically] = React.useState(false);
-    // True after a real gesture until an explicit opt back in; drives the
-    // overlay scrollbar suppression instead of the anchor's mere existence.
     const [userOwnsScroll, setUserOwnsScroll] = React.useState(false);
-    const [viewportAtEnd, setViewportAtEnd] = React.useState(true);
+    const [nearContentStart, setNearContentStart] = React.useState(true);
     const userOwnsScrollRef = React.useRef(userOwnsScroll);
     userOwnsScrollRef.current = userOwnsScroll;
 
     const modeRef = React.useRef<TimelineScrollMode>('following-end');
     const isAtEndRef = React.useRef(true);
-    // Incremented by every real user gesture. Automatic movement is only valid
-    // while `liveFollowGenerationRef` still equals it.
+    const pinnedThroughAnimationRef = React.useRef(false);
+    const animationEndCorrectionRef = React.useRef(0);
     const userGenerationRef = React.useRef(0);
     const liveFollowGenerationRef = React.useRef<number | null>(0);
     const showButtonTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const composerOverlayHeightRef = React.useRef(composerOverlayHeight);
     composerOverlayHeightRef.current = composerOverlayHeight;
-    // Mobile keyboard / composer transitions drive scrollTop themselves for
-    // their duration (keyboardFollowGlide); every automatic end write below
-    // yields while the glide holds the viewport.
     const followGlideRef = React.useRef<KeyboardFollowGlide | null>(null);
     const followGlideHeld = () => followGlideRef.current?.isHeld() === true;
-    // Size of the list footer, reported by the list as it is measured; the
-    // real content end sits below the last row by this much.
+    const liveGlideRef = React.useRef<FollowGlide | null>(null);
+    const activityRenderMode = useUIStore((state) => state.activityRenderMode);
+    const stopAfterUserMessageRef = React.useRef(activityRenderMode !== 'summary');
+    stopAfterUserMessageRef.current = activityRenderMode !== 'summary';
+    const followStopEligibilityRef = React.useRef(new WeakMap<HTMLElement, boolean>());
+    const followStoppedAtGenerationRef = React.useRef<number | null>(null);
+    const rowExpandReleaseRef = React.useRef<{ generation: number; grew: boolean } | null>(null);
+    const revealedPagesRef = React.useRef(new Set<string>());
+    const pageRevealRef = React.useRef<{ pageId: string | null; block: HTMLElement; generation: number; until: number } | null>(null);
+    const lastStreamingReplyRef = React.useRef<HTMLElement | null>(null);
+    const resolveReplyStop = (node: HTMLElement): HTMLElement | null => {
+        const reply = findStreamingReply(node);
+        const ended = lastStreamingReplyRef.current;
+        return reply ?? (ended?.isConnected ? ended : null);
+    };
+    const retireFollowStops = () => {
+        const node = scrollRef.current;
+        if (!node) return;
+        for (const stop of findFollowStops(node, stopAfterUserMessageRef.current, resolveReplyStop(node))) {
+            followStopEligibilityRef.current.set(stop.element, false);
+        }
+    };
+    const listHeaderSizeRef = React.useRef(0);
     const listFooterSizeRef = React.useRef(0);
-    const onListMetricsChange = React.useCallback((metrics: { readonly footerSize: number }) => {
+    const onListMetricsChange = React.useCallback((metrics: { readonly headerSize: number; readonly footerSize: number }) => {
+        listHeaderSizeRef.current = Number.isFinite(metrics.headerSize) ? metrics.headerSize : 0;
         listFooterSizeRef.current = Number.isFinite(metrics.footerSize) ? metrics.footerSize : 0;
     }, []);
-    const sessionMessageCountRef = React.useRef(sessionMessageCount);
-    sessionMessageCountRef.current = sessionMessageCount;
-    const currentSessionIdRef = React.useRef(currentSessionId);
-    currentSessionIdRef.current = currentSessionId;
     const currentSessionKeyRef = React.useRef(currentSessionKey);
     currentSessionKeyRef.current = currentSessionKey;
-
-    const updateViewportAnchor = useViewportStore((state) => state.updateViewportAnchor);
+    const loadHistoryUntilMessageRef = React.useRef(loadHistoryUntilMessage);
+    loadHistoryUntilMessageRef.current = loadHistoryUntilMessage;
+    const onLinkedMessageMissingRef = React.useRef(onLinkedMessageMissing);
+    onLinkedMessageMissingRef.current = onLinkedMessageMissing;
+    const checkLinkedMessageRef = React.useRef(checkLinkedMessage);
+    checkLinkedMessageRef.current = checkLinkedMessage;
+    const currentSessionIdRef = React.useRef(currentSessionId);
+    currentSessionIdRef.current = currentSessionId;
 
     const cancelShowButtonTimer = React.useCallback(() => {
         if (showButtonTimerRef.current !== null) {
@@ -194,18 +344,14 @@ export const useChatTimelineScroll = ({
         }, SHOW_SCROLL_BUTTON_DELAY_MS);
     }, []);
 
-    // A real gesture: stop every automatic movement until the user opts back
-    // in.
     const onManualNavigation = React.useCallback(() => {
         userGenerationRef.current += 1;
         modeRef.current = 'free-scrolling';
         liveFollowGenerationRef.current = null;
+        liveGlideRef.current?.stop();
         setUserOwnsScroll(true);
-        // The end may already have been left by our own movement, in which
-        // case no further at-end transition will fire — and while an animated
-        // follow glide trails the live edge, isAtEndRef is deliberately not
-        // updated, so measure the real distance instead of trusting it. This
-        // is an explicit gesture — show the pill immediately, no debounce.
+        const linkRequest = peekMessageFocus(currentSessionIdRef.current);
+        if (linkRequest) settleMessageFocus(linkRequest);
         const listState = listRef.current?.getState();
         const atEndNow = (listState ? resolveTimelineIsAtEnd(listState) : undefined) ?? isAtEndRef.current;
         isAtEndRef.current = atEndNow;
@@ -219,74 +365,52 @@ export const useChatTimelineScroll = ({
         liveFollowGenerationRef.current === userGenerationRef.current
     ), []);
 
-    // ── snapshot persistence ────────────────────────────────────────────────
-    const pendingSaveRef = React.useRef<{ sessionId: string; anchor: number } | null>(null);
-    const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const listSessionKeyRef = React.useRef<string | null>(null);
+    const restoreRef = React.useRef<{ cancel: () => void } | null>(null);
+    const restoredEntryKeyRef = React.useRef<string | null>(null);
+    const handledEntryKeyRef = React.useRef<string | null>(null);
+    const linkServedRef = React.useRef<{ key: string; serial: number } | null>(null);
 
-    const flushSave = React.useCallback(() => {
-        if (saveTimerRef.current !== null) {
-            clearTimeout(saveTimerRef.current);
-            saveTimerRef.current = null;
-        }
-        const pending = pendingSaveRef.current;
-        if (!pending) return;
-        const container = scrollRef.current;
-        if (!container) {
-            pendingSaveRef.current = null;
-            return;
-        }
-        updateViewportAnchor(pending.sessionId, pending.anchor, {
-            scrollTop: container.scrollTop,
-            scrollHeight: container.scrollHeight,
-            clientHeight: container.clientHeight,
-        });
-        pendingSaveRef.current = null;
-    }, [updateViewportAnchor]);
+    const rememberOutgoingPosition = React.useCallback((node: HTMLElement, list: TimelineListHandle | null) => {
+        const sessionKey = listSessionKeyRef.current;
+        if (!sessionKey || handledEntryKeyRef.current !== sessionKey || restoreRef.current) return;
+        const state = list?.getState();
+        if (!state || state.scrollLength <= 0) return;
+        // external: #6045 an unknown at-end answer must not clear the saved reading position.
+        const atEnd = (modeRef.current === 'following-end' && isAtEndRef.current)
+            || resolveTimelineIsAtEnd(state) === true;
+        rememberOutgoingSessionScrollPosition(
+            sessionKey,
+            atEnd,
+            atEnd ? null : captureMessageViewportAnchor(node),
+        );
+    }, []);
 
-    const queueSave = React.useCallback(() => {
-        const sessionId = currentSessionIdRef.current;
-        if (!sessionId) return;
-        const container = scrollRef.current;
-        if (!container) return;
+    const captureOutgoingPosition = React.useCallback(() => {
+        if (scrollRef.current) rememberOutgoingPosition(scrollRef.current, listRef.current);
+    }, [rememberOutgoingPosition]);
 
-        const { scrollTop, scrollHeight, clientHeight } = container;
-        const anchorRatio = scrollHeight > 0
-            ? (scrollTop + clientHeight / 2) / scrollHeight
-            : 0;
-        const anchor = Math.floor(anchorRatio * sessionMessageCountRef.current);
-
-        pendingSaveRef.current = { sessionId, anchor };
-        if (saveTimerRef.current !== null) return;
-        saveTimerRef.current = setTimeout(() => {
-            saveTimerRef.current = null;
-            flushSave();
-        }, SAVE_DEBOUNCE_MS);
-    }, [flushSave]);
-
-    const saveSnapshotNow = React.useCallback(() => {
-        flushSave();
-    }, [flushSave]);
-
-    // ── scroll commands ─────────────────────────────────────────────────────
     const goToBottomReassertTimersRef = React.useRef<Array<ReturnType<typeof setTimeout>>>([]);
     const clearGoToBottomReasserts = React.useCallback(() => {
         for (const timer of goToBottomReassertTimersRef.current) clearTimeout(timer);
         goToBottomReassertTimersRef.current = [];
     }, []);
 
-    const goToBottom = React.useCallback((mode: 'instant' | 'smooth' = 'instant') => {
+    const resumeFollow = React.useCallback((passStops: boolean) => {
         isAtEndRef.current = true;
         setIsPinned(true);
         setUserOwnsScroll(false);
         modeRef.current = 'following-end';
-        // Returning to the end is an explicit opt back IN to live follow.
         liveFollowGenerationRef.current = userGenerationRef.current;
+        if (passStops) retireFollowStops();
+        followStoppedAtGenerationRef.current = null;
         hideScrollButton();
+    }, [hideScrollButton]);
+    const jumpToEnd = React.useCallback((mode: 'instant' | 'smooth', passStops: boolean) => {
+        resumeFollow(passStops);
+        pageRevealRef.current = null;
+        liveGlideRef.current?.stop();
         void listRef.current?.scrollToEnd({ animated: mode === 'smooth' });
-        // While a stream is growing the content, a single jump lands on the
-        // end as of that moment and the list's own follow may not have
-        // re-armed yet — re-assert a few times until the edge holds, then the
-        // library follows onward. A new user gesture invalidates the window.
         clearGoToBottomReasserts();
         const generation = userGenerationRef.current;
         for (const delay of [150, 400, 800]) {
@@ -298,31 +422,205 @@ export const useChatTimelineScroll = ({
                 void listRef.current?.scrollToEnd({ animated: false });
             }, delay));
         }
-    }, [clearGoToBottomReasserts, hideScrollButton]);
+    }, [clearGoToBottomReasserts, resumeFollow]);
 
-    // User preference: with auto-follow off, streaming growth never moves the
-    // viewport. Sending from the live edge still lands on the end; sending
-    // from mid-history leaves the viewport untouched.
+    const goToBottom = React.useCallback((mode: 'instant' | 'smooth' = 'instant') => {
+        jumpToEnd(mode, !isLiveFollowActive());
+    }, [isLiveFollowActive, jumpToEnd]);
+
     const streamingAutoFollowEnabled = useUIStore((state) => state.streamingAutoFollowEnabled);
     const streamingAutoFollowEnabledRef = React.useRef(streamingAutoFollowEnabled);
     streamingAutoFollowEnabledRef.current = streamingAutoFollowEnabled;
 
-    // Sending is an explicit return to the live edge: the sent row and the
-    // reply that follows it stay in view through ordinary end-follow.
+    const followEndRef = React.useRef<() => void>(() => {});
+
     const scrollToBottomOnSend = React.useCallback(() => {
-        // With auto-follow off, a reader who scrolled away from the end stays
-        // exactly where they are; the scroll-to-bottom pill (already showing)
-        // leads to the sent message.
         if (!streamingAutoFollowEnabledRef.current && !isAtEndRef.current) return;
-        goToBottom('instant');
-    }, [goToBottom]);
+        restoreRef.current?.cancel();
+        retireFollowStops();
+        lastStreamingReplyRef.current = null;
+        if (streamingAutoFollowEnabledRef.current) {
+            sendGlideUntilRef.current = performance.now() + SEND_GLIDE_WINDOW_MS;
+            if (modeRef.current === 'following-end' && isAtEndRef.current && isLiveFollowActive()) {
+                followEndRef.current();
+                return;
+            }
+        }
+        jumpToEnd('instant', false);
+    }, [isLiveFollowActive, jumpToEnd]);
+
+    const holdRememberedPosition = React.useCallback(() => {
+        clearGoToBottomReasserts();
+        modeRef.current = 'free-scrolling';
+        liveFollowGenerationRef.current = null;
+        liveGlideRef.current?.stop();
+        isAtEndRef.current = false;
+        userOwnsScrollRef.current = true;
+        setIsPinned(false);
+        setUserOwnsScroll(true);
+        cancelShowButtonTimer();
+        setShowScrollButton(true);
+    }, [cancelShowButtonTimer, clearGoToBottomReasserts]);
+
+    const settleLinkTarget = React.useCallback((target: PositionTarget) => {
+        if (target.kind !== 'link') return;
+        settleMessageFocus(target.request);
+        linkServedRef.current = null;
+    }, []);
+
+    const startPositionRestore = React.useCallback((
+        target: PositionTarget,
+        node: HTMLElement,
+        releaseReveal: (() => void) | null,
+    ): boolean => {
+        const { anchor } = target;
+        const first = messageListRef.current?.alignViewportAnchor(anchor) ?? 'missing';
+        if (first === 'missing') return false;
+        holdRememberedPosition();
+
+        let frame: number | null = null;
+        let frames = 0;
+        let stable = first === 'aligned' ? 1 : 0;
+        let readyStable = 0;
+        let settled = false;
+        let finished = false;
+        const settle = () => {
+            if (settled) return;
+            settled = true;
+            releaseReveal?.();
+            if (target.kind === 'link') {
+                highlightLinkedMessage(node, anchor.messageId);
+                markMessageFocusShown(target.request);
+            }
+        };
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+            if (frame !== null) window.cancelAnimationFrame(frame);
+            node.removeEventListener('wheel', onInput);
+            node.removeEventListener('touchstart', onInput);
+            node.removeEventListener('pointerdown', onInput);
+            node.removeEventListener('keydown', onInput);
+            if (restoreRef.current === restore) restoreRef.current = null;
+            releaseReveal?.();
+        };
+        const onInput = () => {
+            settleLinkTarget(target);
+            finish();
+        };
+        const restore = { cancel: finish };
+        restoreRef.current?.cancel();
+        restoreRef.current = restore;
+        node.addEventListener('wheel', onInput, { passive: true });
+        node.addEventListener('touchstart', onInput, { passive: true });
+        node.addEventListener('pointerdown', onInput, { passive: true });
+        node.addEventListener('keydown', onInput);
+
+        const step = () => {
+            frame = null;
+            if (finished || scrollRef.current !== node) {
+                finish();
+                return;
+            }
+            const result = messageListRef.current?.alignViewportAnchor(anchor) ?? 'missing';
+            frames += 1;
+            stable = result === 'aligned' ? stable + 1 : 0;
+            if (stable >= 2) settle();
+            const loading = node.querySelector(`[data-message-id="${CSS.escape(anchor.messageId)}"] [data-chat-quote-pending]`) !== null;
+            readyStable = result === 'aligned' && !loading ? readyStable + 1 : 0;
+            if (result === 'missing' || readyStable >= ANCHOR_HOLD_STABLE_FRAMES || frames >= ANCHOR_HOLD_MAX_FRAMES) {
+                finish();
+                return;
+            }
+            frame = window.requestAnimationFrame(step);
+        };
+        frame = window.requestAnimationFrame(step);
+        return true;
+    }, [holdRememberedPosition, messageListRef, settleLinkTarget]);
+
+    const showTargetFromOlderHistory = React.useCallback((
+        target: PositionTarget,
+        sessionKey: string,
+        gate: TimelineRevealGate | null,
+    ) => {
+        const isLink = target.kind === 'link';
+        const reportMissing = () => {
+            settleLinkTarget(target);
+            onLinkedMessageMissingRef.current?.();
+        };
+        const loadHistoryUntil = loadHistoryUntilMessageRef.current;
+        if (!loadHistoryUntil) {
+            if (isLink) reportMissing();
+            return;
+        }
+        if (!isLink && isMobileSurfaceRuntime()) return;
+        const releaseReveal = gate?.hold() ?? null;
+        gate?.extendCap(REMEMBERED_POSITION_REVEAL_WAIT_MS);
+        const generation = userGenerationRef.current;
+        let cancelled = false;
+        const search = {
+            cancel: () => {
+                cancelled = true;
+                releaseReveal?.();
+            },
+        };
+        restoreRef.current?.cancel();
+        restoreRef.current = search;
+        const maxBatches = isLink ? Number.POSITIVE_INFINITY : REMEMBERED_POSITION_HISTORY_BATCHES;
+        const checkLinked = isLink ? checkLinkedMessageRef.current : undefined;
+        const unknown: LinkedMessageState = 'unknown';
+        const existence: Promise<LinkedMessageState> = checkLinked
+            ? checkLinked(target.anchor.messageId).catch(() => unknown)
+            : Promise.resolve(unknown);
+        void existence
+            .then((state) => (cancelled || state === 'missing' ? false : loadHistoryUntil(target.anchor.messageId, maxBatches)))
+            .catch(() => false)
+            .then((found) => {
+                if (restoreRef.current === search) restoreRef.current = null;
+                const node = scrollRef.current;
+                const sameSession = !cancelled
+                    && currentSessionKeyRef.current === sessionKey
+                    && listSessionKeyRef.current === sessionKey;
+                if (!sameSession) {
+                    releaseReveal?.();
+                    return;
+                }
+                if (!found) {
+                    if (isLink) reportMissing();
+                    releaseReveal?.();
+                    return;
+                }
+                if (userGenerationRef.current !== generation) {
+                    settleLinkTarget(target);
+                    releaseReveal?.();
+                    return;
+                }
+                if (!node || !startPositionRestore(target, node, releaseReveal)) {
+                    releaseReveal?.();
+                }
+            });
+    }, [settleLinkTarget, startPositionRestore]);
+
+    const showPositionTarget = React.useCallback((
+        target: PositionTarget,
+        node: HTMLElement,
+        sessionKey: string,
+        gate: TimelineRevealGate | null,
+        releaseReveal: (() => void) | null,
+    ): boolean => {
+        if (target.kind === 'link') {
+            linkServedRef.current = { key: sessionKey, serial: target.request.serial };
+        }
+        if (startPositionRestore(target, node, releaseReveal)) return true;
+        showTargetFromOlderHistory(target, sessionKey, gate);
+        return false;
+    }, [showTargetFromOlderHistory, startPositionRestore]);
 
     const restoreSnapshot = React.useCallback(async (): Promise<boolean> => {
         const sessionKey = currentSessionKeyRef.current;
         if (!sessionKey) return false;
+        if (restoredEntryKeyRef.current === sessionKey) return true;
 
-        // Entering a session always returns to the live edge. Late async growth
-        // is handled by the list staying at the end, not by a timed hold.
         isAtEndRef.current = true;
         setUserOwnsScroll(false);
         modeRef.current = 'following-end';
@@ -332,36 +630,41 @@ export const useChatTimelineScroll = ({
         return false;
     }, [hideScrollButton]);
 
-    // ── list callbacks ──────────────────────────────────────────────────────
-    const registerList = React.useCallback((list: TimelineListHandle | null) => {
+    const registerList = React.useCallback((list: TimelineListHandle | null, sessionKey?: string) => {
+        if (sessionKey !== undefined) {
+            if (list && sessionKey !== currentSessionKeyRef.current) return;
+            if (!list && sessionKey !== listSessionKeyRef.current) return;
+        }
         const previousNode = scrollRef.current;
-        listRef.current = list;
+        // SAFETY: LegendList's web renderer mounts its scroll container as a div.
         const node = (list?.getScrollableNode() as HTMLDivElement | null) ?? null;
+        if (previousNode && previousNode !== node) {
+            rememberOutgoingPosition(previousNode, listRef.current);
+        }
+        listRef.current = list;
         scrollRef.current = node;
         setScrollNode(node);
+        listSessionKeyRef.current = node ? sessionKey ?? currentSessionKeyRef.current : null;
         if (previousNode && previousNode !== node) {
             retireScrollContent(previousNode, () => scrollRef.current === previousNode);
         }
-    }, []);
+    }, [rememberOutgoingPosition]);
 
-    const onIsAtEndChange = React.useCallback((isAtEnd: boolean) => {
-        // While an automatic movement owns the viewport, leaving the end is our
-        // own doing (the glide trails its target between corrections) — not a
-        // reason to offer the pill. Only a
-        // real gesture (free-scrolling) shows it.
+    const applyIsAtEnd = React.useCallback((isAtEnd: boolean) => {
         if (!isAtEnd && isLiveFollowActive()) {
             hideScrollButton();
             return;
         }
-        // Mid-glide the viewport trails the end by design; the glide lands on
-        // it, so a "left the end" report here is not a reader leaving.
         if (!isAtEnd && followGlideHeld()) return;
+        if (!isAtEnd && pinnedThroughAnimationRef.current) return;
         if (isAtEndRef.current === isAtEnd) return;
+        if (isAtEnd && isTurnRunning() && followStoppedAtGenerationRef.current === userGenerationRef.current) return;
         isAtEndRef.current = isAtEnd;
         setIsPinned(isAtEnd);
         if (isAtEnd) {
             modeRef.current = 'following-end';
             liveFollowGenerationRef.current = userGenerationRef.current;
+            retireFollowStops();
             setUserOwnsScroll(false);
             hideScrollButton();
         } else {
@@ -369,50 +672,60 @@ export const useChatTimelineScroll = ({
             liveFollowGenerationRef.current = null;
             scheduleShowScrollButton();
         }
-        queueSave();
-    }, [hideScrollButton, isLiveFollowActive, queueSave, scheduleShowScrollButton]);
+    }, [hideScrollButton, isLiveFollowActive, scheduleShowScrollButton]);
 
-    // Whether the real rows are tall enough to scroll at all.
+    const endArrivalPendingRef = React.useRef(false);
+    const endArrivalFrameRef = React.useRef<number | null>(null);
+    const endArrivalBandRef = React.useRef(0);
+    const confirmEndArrived = React.useCallback((band: number) => {
+        endArrivalBandRef.current = endArrivalPendingRef.current ? Math.max(endArrivalBandRef.current, band) : band;
+        if (endArrivalPendingRef.current) return;
+        endArrivalPendingRef.current = true;
+        queueMicrotask(() => {
+            if (!endArrivalPendingRef.current) return;
+            endArrivalFrameRef.current = window.requestAnimationFrame(() => {
+                endArrivalFrameRef.current = null;
+                endArrivalPendingRef.current = false;
+                if (isAtEndRef.current) return;
+                const state = listRef.current?.getState();
+                if (!state || state.contentLength === undefined) return;
+                if (state.contentLength - state.scroll - state.scrollLength <= endArrivalBandRef.current) applyIsAtEnd(true);
+            });
+        });
+    }, [applyIsAtEnd]);
+    const onIsAtEndChange = React.useCallback((isAtEnd: boolean) => {
+        if (isAtEnd && userOwnsScrollRef.current && !isAtEndRef.current && !isTurnRunning()) {
+            confirmEndArrived(TIMELINE_FOLLOW_REARM_THRESHOLD_PX);
+            return;
+        }
+        applyIsAtEnd(isAtEnd);
+    }, [applyIsAtEnd, confirmEndArrived]);
+
+    React.useEffect(() => {
+        if (sessionIsWorking) return;
+        if (isAtEndRef.current || followStoppedAtGenerationRef.current !== userGenerationRef.current) return;
+        const state = listRef.current?.getState();
+        if (state && resolveTimelineIsAtEnd(state) === true) onIsAtEndChange(true);
+    }, [onIsAtEndChange, sessionIsWorking]);
+
     const realContentOverflowsViewport = React.useCallback((list: TimelineListHandle): boolean => {
         const state = list.getState();
         if (state.data.length === 0) return false;
 
-        const lastIndex = state.data.length - 1;
-        const lastTop = state.positionAtIndex(lastIndex);
-        const lastHeight = state.sizeAtIndex(lastIndex);
-        if (
-            typeof lastTop !== 'number'
-            || typeof lastHeight !== 'number'
-            || !Number.isFinite(lastTop)
-            || !Number.isFinite(lastHeight)
-        ) {
-            return false;
-        }
-
-        const realContentBottom = lastTop + Math.max(1, lastHeight);
+        const realContentBottom = getRowBottom(state, state.data.length - 1);
+        if (realContentBottom === null) return false;
         const visibleScrollLength = Math.max(0, state.scrollLength - composerOverlayHeightRef.current);
         return realContentBottom > visibleScrollLength;
     }, []);
 
-    // While the list width is resizing every row re-wraps, and the list's
-    // total content length lags a frame behind the rows it contains: it
-    // still carries pre-wrap row sizes, so any end computed from it (the
-    // list's own maintainScrollAtEnd, the scroll node's scrollHeight) lands
-    // on a blank tail or short of the real end and the viewport bounces.
-    // A pinned reader — streaming or idle — stays on the end throughout: the
-    // pinned-end observer below re-asserts the MEASURED end of the last real
-    // row on every layout write, and once the resize settles the end is
-    // asserted one last time against the same measurement. An unpinned
-    // reader is held in place by the list's size compensation instead and
-    // is never scrolled.
     const widthResizingRef = React.useRef(false);
     React.useEffect(() => {
-        if (!scrollNode || typeof ResizeObserver === 'undefined') return;
+        if (!scrollNode || !globalThis.ResizeObserver) return;
         let lastWidth: number | null = null;
         let quietTimer: ReturnType<typeof setTimeout> | null = null;
         const observer = new ResizeObserver((observerEntries) => {
             const width = observerEntries[observerEntries.length - 1]?.contentRect.width;
-            if (typeof width !== 'number') return;
+            if (width === undefined) return;
             if (lastWidth === null) {
                 lastWidth = width;
                 return;
@@ -431,7 +744,7 @@ export const useChatTimelineScroll = ({
                 const offset = state
                     ? resolveRealContentEndOffset({
                         state,
-                        composerOverlayHeight: composerOverlayHeightRef.current,
+                        headerSize: listHeaderSizeRef.current,
                         footerSize: listFooterSizeRef.current,
                     })
                     : null;
@@ -446,45 +759,135 @@ export const useChatTimelineScroll = ({
         return () => {
             observer.disconnect();
             if (quietTimer !== null) clearTimeout(quietTimer);
+            widthResizingRef.current = false;
         };
     }, [scrollNode]);
 
-    // Keep the live edge in view after content growth. Within a viewport of
-    // the end the remaining distance is glided so a revealed block and the
-    // scroll read as one motion; further behind, the viewport first jumps to
-    // one screen above the end and glides only that last screen, so the
-    // reader is never left staring at a gap several screens tall. Writes go
-    // to the scroll node directly: routing each chunk through the list's
-    // scrollToEnd bookkeeping roughly doubled frame production when measured.
-    // A user gesture interrupts the native smooth scroll on its own, and the
-    // gesture handler drops live follow so no later correction re-engages.
+    const pinEndAtRest = React.useCallback((node: HTMLElement) => {
+        const end = node.scrollHeight - node.clientHeight;
+        if (end - node.scrollTop <= 1) return;
+        node.scrollTop = end;
+    }, []);
+
+    const followFrameRef = React.useRef<number | null>(null);
+    const releaseFollowAtStop = React.useCallback(() => {
+        followStoppedAtGenerationRef.current = userGenerationRef.current;
+        modeRef.current = 'free-scrolling';
+        liveFollowGenerationRef.current = null;
+        isAtEndRef.current = false;
+        userOwnsScrollRef.current = true;
+        setIsPinned(false);
+        setUserOwnsScroll(true);
+        scheduleShowScrollButton();
+    }, [scheduleShowScrollButton]);
     const followEnd = React.useCallback(() => {
         const node = scrollRef.current;
         if (!node) return;
         if (followGlideHeld()) return;
-        const end = node.scrollHeight - node.clientHeight;
-        const distance = end - node.scrollTop;
-        if (distance <= 1) return;
-        if (!sessionIsWorkingRef.current) {
-            node.scrollTop = end;
+        if (!isLive()) {
+            liveGlideRef.current?.stop();
+            pinEndAtRest(node);
             return;
         }
-        if (distance > node.clientHeight) {
-            node.scrollTop = end - node.clientHeight;
-        }
-        node.scrollTo({ top: end, behavior: 'smooth' });
+        if (followFrameRef.current !== null) return;
+        const frame = window.requestAnimationFrame(() => {
+            if (followFrameRef.current !== frame) return;
+            followFrameRef.current = null;
+            if (scrollRef.current !== node || followGlideHeld()) return;
+            if (!isLiveFollowActive() || modeRef.current !== 'following-end') return;
+            const list = listRef.current;
+            const glide = liveGlideRef.current;
+            if (!glide) return;
+            const state = list?.getState();
+            const stateEnd = state ? Math.max(0, (state.contentLength ?? 0) - state.scrollLength) : null;
+            if (state && stateEnd !== null && glide.isHeadingTo(stateEnd, state.scroll)) return;
+            const viewportLength = node.clientHeight;
+            const end = Math.max(0, node.scrollHeight - viewportLength);
+            const scroll = node.scrollTop;
+            const glideTarget = resolveFollowGlideTarget(end, scroll);
+            if (glideTarget === null) {
+                glide.stop();
+                return;
+            }
+            let target = glideTarget;
+            const eligibility = followStopEligibilityRef.current;
+            let stopped = false;
+            const streamingReply = findStreamingReply(node);
+            const endedReply = lastStreamingReplyRef.current;
+            lastStreamingReplyRef.current = streamingReply;
+            const reply = streamingReply ?? (endedReply?.isConnected ? endedReply : null);
+            const visibleLength = viewportLength - listFooterSizeRef.current;
+            for (const stop of findFollowStops(node, stopAfterUserMessageRef.current, reply)) {
+                if (!eligibility.has(stop.element)) eligibility.set(stop.element, scroll <= stop.limit + 1);
+                if (stopped || eligibility.get(stop.element) !== true) continue;
+                const held = resolveFollowStop(glideTarget, stop, visibleLength);
+                if (!held.hold) continue;
+                target = held.target;
+                stopped = true;
+                eligibility.set(stop.element, false);
+                releaseFollowAtStop();
+            }
+            if (Math.abs(target - scroll) <= 1) {
+                glide.stop();
+                return;
+            }
+            if (target - scroll > viewportLength) node.scrollTop = target - viewportLength;
+            glide.aim(target, stateEnd ?? end, prefersReducedMotion());
+        });
+        followFrameRef.current = frame;
+    }, [isLiveFollowActive, pinEndAtRest, releaseFollowAtStop]);
+    followEndRef.current = followEnd;
+
+    const pageRevealFrameRef = React.useRef<number | null>(null);
+    const revealWaitingPage = React.useCallback(() => {
+        if (pageRevealRef.current === null || pageRevealFrameRef.current !== null) return;
+        pageRevealFrameRef.current = window.requestAnimationFrame(() => {
+            pageRevealFrameRef.current = null;
+            const node = scrollRef.current;
+            const reveal = pageRevealRef.current;
+            if (!node || !reveal) return;
+            if (reveal.generation !== userGenerationRef.current || performance.now() > reveal.until || !reveal.block.isConnected) {
+                pageRevealRef.current = null;
+                return;
+            }
+            const offset = node.scrollTop - node.getBoundingClientRect().top;
+            const rect = reveal.block.getBoundingClientRect();
+            const viewportLength = node.clientHeight;
+            const scroll = node.scrollTop;
+            const page = { top: rect.top + offset, bottom: rect.bottom + offset };
+            const topGap = messageLinkOffsetTop(node);
+            let target = resolvePageRevealTarget(page, scroll, viewportLength - listFooterSizeRef.current, topGap);
+            if (target === null) return;
+            const end = node.scrollHeight - viewportLength;
+            if (end - target <= TIMELINE_FOLLOW_REARM_THRESHOLD_PX && page.top - topGap >= end) {
+                target = end;
+                resumeFollow(true);
+            } else if (modeRef.current === 'following-end') {
+                releaseFollowAtStop();
+            }
+            liveGlideRef.current?.stop();
+            if (Math.abs(target - scroll) > viewportLength) {
+                node.scrollTop = target + (target > scroll ? -viewportLength : viewportLength);
+            }
+            node.scrollTo({ top: target, behavior: followScrollBehavior() });
+        });
+    }, [releaseFollowAtStop, resumeFollow]);
+    const revealWaitingPageRef = React.useRef(revealWaitingPage);
+    revealWaitingPageRef.current = revealWaitingPage;
+    React.useEffect(() => () => {
+        if (followFrameRef.current !== null) window.cancelAnimationFrame(followFrameRef.current);
+        followFrameRef.current = null;
+        if (pageRevealFrameRef.current !== null) window.cancelAnimationFrame(pageRevealFrameRef.current);
+        pageRevealFrameRef.current = null;
+        if (endArrivalFrameRef.current !== null) window.cancelAnimationFrame(endArrivalFrameRef.current);
+        endArrivalFrameRef.current = null;
+        endArrivalPendingRef.current = false;
     }, []);
 
     const onTimelineDataChange = React.useCallback(() => {
         if (widthResizingRef.current) return;
+        revealWaitingPage();
 
-        // Stranded-viewport rescue, independent of any follow mode or
-        // preference: when off-screen size estimates settle smaller than
-        // estimated, the measured content can end ABOVE the viewport while
-        // the scroll offset stays at the stale end — the reader faces a blank
-        // phantom tail with every row out of reach above. That state is never
-        // intentional, so it is corrected even when auto-follow is off. Only
-        // a fully blank viewport qualifies; partial visibility is left alone.
         if (!userOwnsScrollRef.current) {
             const list = listRef.current;
             if (list) {
@@ -494,7 +897,7 @@ export const useChatTimelineScroll = ({
                 if (lastBottom !== null && state.scroll > lastBottom) {
                     const offset = resolveRealContentEndOffset({
                         state,
-                        composerOverlayHeight: composerOverlayHeightRef.current,
+                        headerSize: listHeaderSizeRef.current,
                         footerSize: listFooterSizeRef.current,
                     });
                     if (offset !== null) {
@@ -505,47 +908,50 @@ export const useChatTimelineScroll = ({
             }
         }
 
-        if (!streamingAutoFollowEnabledRef.current) {
-            // With auto-follow off nothing moves the viewport, so a growing
-            // reply slides below the visible area without a single scroll
-            // event — and the at-end transition that offers the pill never
-            // fires. Content growth is the signal here: once the real last
-            // row extends past what the composer leaves visible, the reader
-            // is factually behind and the pill must say so.
+        const offerEndIfLeftBehind = () => {
             const list = listRef.current;
-            if (list && isAtEndRef.current) {
-                const state = list.getState();
-                const lastIndex = state.data.length - 1;
-                const lastBottom = lastIndex >= 0 ? getRowBottom(state, lastIndex) : null;
-                if (lastBottom !== null) {
-                    const visibleBottom = state.scroll + state.scrollLength - composerOverlayHeightRef.current;
-                    if (lastBottom - visibleBottom > TIMELINE_FOLLOW_REARM_THRESHOLD_PX) {
-                        isAtEndRef.current = false;
-                        setIsPinned(false);
-                        scheduleShowScrollButton();
-                    }
+            if (!list) return;
+            const state = list.getState();
+            const below = state.contentLength === undefined ? null : state.contentLength - state.scroll - state.scrollLength;
+            if (!isAtEndRef.current) {
+                if (below !== null && below <= 1) confirmEndArrived(1);
+                return;
+            }
+            const opened = rowExpandReleaseRef.current;
+            if (opened && opened.generation === userGenerationRef.current && below !== null) {
+                if (below > 1) {
+                    opened.grew = true;
+                } else if (opened.grew) {
+                    rowExpandReleaseRef.current = null;
+                    isAtEndRef.current = false;
+                    applyIsAtEnd(true);
+                    return;
                 }
             }
+            const lastIndex = state.data.length - 1;
+            const lastBottom = lastIndex >= 0 ? getRowBottom(state, lastIndex) : null;
+            if (lastBottom === null) return;
+            const visibleBottom = state.scroll + state.scrollLength - composerOverlayHeightRef.current;
+            if (lastBottom - visibleBottom > TIMELINE_FOLLOW_REARM_THRESHOLD_PX) {
+                isAtEndRef.current = false;
+                setIsPinned(false);
+                scheduleShowScrollButton();
+            }
+        };
+
+        if (!streamingAutoFollowEnabledRef.current) {
+            offerEndIfLeftBehind();
             return;
         }
-        if (!isLiveFollowActive()) return;
+        if (!isLiveFollowActive()) {
+            offerEndIfLeftBehind();
+            return;
+        }
 
-        // Following the end is owned here, not left to the list's
-        // maintainScrollAtEnd. The list's animated maintain is single-flight:
-        // growth that lands while a glide is still in flight is dropped until
-        // the next trigger, and its re-pin threshold is a tenth of the
-        // viewport. In a narrow viewport (the VS Code sidebar) one revealed
-        // block is several viewports tall, so every block left the reader a
-        // second behind and multiple screens above the live edge — measured
-        // at 45% of the stream time spent 500-1600px behind at 420x640.
         if (modeRef.current !== 'following-end') return;
         followEnd();
-    }, [followEnd, isLiveFollowActive, scheduleShowScrollButton]);
+    }, [applyIsAtEnd, confirmEndArrived, followEnd, isLiveFollowActive, revealWaitingPage, scheduleShowScrollButton]);
 
-    // The streaming tail grows inside one row without changing the entries
-    // array, so data-change callbacks are silent for the entire stream. The
-    // list's total content size is the authoritative growth signal; every
-    // change re-runs the same guarded correction.
     const onTimelineDataChangeRef = React.useRef(onTimelineDataChange);
     onTimelineDataChangeRef.current = onTimelineDataChange;
     React.useEffect(() => {
@@ -558,16 +964,12 @@ export const useChatTimelineScroll = ({
         return unsubscribe;
     }, [scrollNode]);
 
-    // ── gesture opt-out ─────────────────────────────────────────────────────
     const onManualNavigationRef = React.useRef(onManualNavigation);
     onManualNavigationRef.current = onManualNavigation;
 
     React.useEffect(() => {
         if (!scrollNode) return;
 
-        // A gesture is meaningful when the viewport can move up AT ALL:
-        // either the real rows overflow the viewport, or there is scrolled
-        // history above.
         const canScrollUp = () => {
             const list = listRef.current;
             if (!list) return false;
@@ -578,18 +980,10 @@ export const useChatTimelineScroll = ({
             onManualNavigationRef.current();
         };
         const handleWheel = (event: WheelEvent) => {
-            // Scrolling toward the end is not opting out of follow, and an
-            // upward wheel that a nested scroller still consumes never
-            // reaches the timeline.
             if (event.deltaY < 0 && !nestedScrollableConsumesWheelUp(scrollNode, event.target) && canScrollUp()) {
                 gesture();
             }
         };
-        // Touch mirrors wheel by finger direction, not by having already left
-        // the end: while a stream keeps re-pinning the viewport, waiting for
-        // an at-end transition means the drag never registers — the user
-        // cannot scroll, the pill never appears, and live-follow stays armed
-        // under a viewport they are fighting for.
         let touchLastX: number | null = null;
         let touchLastY: number | null = null;
         const handleTouchStart = (event: TouchEvent) => {
@@ -604,13 +998,9 @@ export const useChatTimelineScroll = ({
             touchLastX = x;
             touchLastY = y;
             if (x === null || y === null || lastX === null || lastY === null) return;
-            // Only a vertical drag is a scroll gesture: a horizontal swipe (the
-            // mobile drawers open from the chat's edges) wobbles a pixel or two
-            // in y and must not release follow or hide the floating rows.
             const dx = x - lastX;
             const dy = y - lastY;
             if (Math.abs(dy) <= Math.abs(dx)) return;
-            // A downward finger drags the content up — the touch wheel-up.
             const draggedUp = dy > 0;
             if ((draggedUp || !isAtEndRef.current) && canScrollUp()) gesture();
         };
@@ -619,11 +1009,6 @@ export const useChatTimelineScroll = ({
             touchLastY = null;
         };
         const handlePointerDown = (event: PointerEvent) => {
-            // A middle-button pan scrolls without wheel events (and is the
-            // only scroll gesture for wheel-less mice), so the press is the
-            // opt-out. Otherwise the scrollbar track is the scroll node
-            // itself; a tap on a row only breaks follow when the viewport
-            // already left the end.
             if (isMiddleButtonPan(scrollNode, event)) {
                 if (canScrollUp()) gesture();
                 return;
@@ -633,12 +1018,38 @@ export const useChatTimelineScroll = ({
         const handleKeyDown = (event: KeyboardEvent) => {
             if (isFollowReleaseKey(event) && canScrollUp()) gesture();
         };
+        const stopFrameScroll = onFrameScroll(scrollNode, (direction) => {
+            if ((direction === 'up' || !isAtEndRef.current) && canScrollUp()) gesture();
+        });
+        const stopRowExpand = onRowExpand(scrollNode, () => {
+            if (modeRef.current !== 'following-end') return;
+            gesture();
+            rowExpandReleaseRef.current = { generation: userGenerationRef.current, grew: false };
+            void listRef.current?.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
+        });
+        const stopPageWaiting = onPageWaiting(scrollNode, (block, pageId) => {
+            const reveal = pageRevealRef.current;
+            if (reveal?.pageId === pageId) {
+                reveal.block = block;
+            } else {
+                if (revealedPagesRef.current.has(pageId)) return;
+                revealedPagesRef.current.add(pageId);
+                const following = modeRef.current === 'following-end' && isLiveFollowActive();
+                const stopped = followStoppedAtGenerationRef.current === userGenerationRef.current;
+                if (!streamingAutoFollowEnabledRef.current || (!following && !stopped)) return;
+                pageRevealRef.current = { pageId, block, generation: userGenerationRef.current, until: performance.now() + PAGE_REVEAL_SETTLE_MS };
+            }
+            revealWaitingPageRef.current();
+        });
+        const stopTabStep = onTabStep(scrollNode, (block) => {
+            void listRef.current?.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
+            pageRevealRef.current = { pageId: null, block, generation: userGenerationRef.current, until: performance.now() + PAGE_REVEAL_SETTLE_MS };
+            revealWaitingPageRef.current();
+        });
         const handleScroll = () => {
-            queueSave();
-            // Mid-glide the viewport is legitimately short of the end.
-            if (followGlideHeld()) return;
-            const distance = scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop;
-            setViewportAtEnd(distance <= TIMELINE_FOLLOW_REARM_THRESHOLD_PX);
+            const scrollTop = scrollNode.scrollTop;
+            const viewportLength = listRef.current?.getState().scrollLength ?? 0;
+            setNearContentStart(scrollTop < viewportLength * LOAD_OLDER_REACH_VIEWPORTS);
         };
 
         scrollNode.addEventListener('wheel', handleWheel, { passive: true });
@@ -659,17 +1070,53 @@ export const useChatTimelineScroll = ({
             scrollNode.removeEventListener('pointerdown', handlePointerDown);
             scrollNode.removeEventListener('keydown', handleKeyDown);
             scrollNode.removeEventListener('scroll', handleScroll);
+            stopFrameScroll();
+            stopRowExpand();
+            stopPageWaiting();
+            stopTabStep();
+            pageRevealRef.current = null;
         };
-    }, [queueSave, realContentOverflowsViewport, scrollNode]);
+    }, [isLiveFollowActive, realContentOverflowsViewport, scrollNode]);
 
-    // ── entry pin ───────────────────────────────────────────────────────────
-    // An opened session is shown once, already at its end: the reveal gate is
-    // held until the viewport sits on the end, and the pin is one instant
-    // write. The list lays its rows out before the first frame, so this
-    // resolves within a frame; the gate's own cap bounds the wait.
+    const lastSessionKeyRef = React.useRef<string | null>(null);
+    React.useLayoutEffect(() => {
+        if (!currentSessionId || !currentSessionKey || currentSessionKey === lastSessionKeyRef.current) {
+            return;
+        }
+        lastSessionKeyRef.current = currentSessionKey;
+        MessageFreshnessDetector.getInstance().recordSessionStart(currentSessionId);
+        restoreRef.current?.cancel();
+        restoredEntryKeyRef.current = null;
+        releaseMessageFocusOutside(currentSessionId);
+        if (!pinned) releaseWaitingPageRevealOutside(currentSessionId);
+        linkServedRef.current = null;
+        isAtEndRef.current = true;
+        setUserOwnsScroll(false);
+        setNearContentStart(true);
+        liveGlideRef.current?.stop();
+        modeRef.current = 'following-end';
+        liveFollowGenerationRef.current = userGenerationRef.current;
+        followStoppedAtGenerationRef.current = null;
+        hideScrollButton();
+    }, [currentSessionId, currentSessionKey, hideScrollButton, pinned]);
+
     React.useLayoutEffect(() => {
         if (!currentSessionKey || !scrollNode) return;
         const releaseReveal = revealGate?.hold() ?? null;
+        if (scrollRef.current === scrollNode && handledEntryKeyRef.current !== currentSessionKey) {
+            handledEntryKeyRef.current = currentSessionKey;
+            const linkRequest = peekMessageFocus(currentSessionIdRef.current);
+            const remembered = !pinned && isWaitingPageRevealPending(currentSessionIdRef.current)
+                ? null
+                : readSessionScrollPosition(currentSessionKey);
+            const target: PositionTarget | null = linkRequest
+                ? linkTarget(linkRequest, scrollNode)
+                : remembered ? { kind: 'remembered', anchor: remembered } : null;
+            if (target && showPositionTarget(target, scrollNode, currentSessionKey, revealGate, releaseReveal)) {
+                restoredEntryKeyRef.current = currentSessionKey;
+                return () => releaseReveal?.();
+            }
+        }
         let frame: number | null = null;
         const settle = () => {
             frame = null;
@@ -684,13 +1131,44 @@ export const useChatTimelineScroll = ({
             if (frame !== null) cancelAnimationFrame(frame);
             releaseReveal?.();
         };
-    }, [currentSessionKey, revealGate, scrollNode]);
+    }, [currentSessionKey, pinned, revealGate, scrollNode, showPositionTarget]);
 
-    // ── keyboard follow glide ───────────────────────────────────────────────
-    // On mobile the keyboard and the composer morph change the transcript's
-    // geometry in single steps; the glide drives scrollTop across them on the
-    // keyboard's curve so a pinned reader sees one motion, not snaps. It only
-    // engages for a reader on the end with follow active.
+    React.useEffect(() => {
+        if (!scrollNode || !currentSessionKey) return;
+        const showRequested = () => {
+            if (scrollRef.current !== scrollNode || handledEntryKeyRef.current !== currentSessionKey) return;
+            const request = peekMessageFocus(currentSessionIdRef.current);
+            if (!request) return;
+            const served = linkServedRef.current;
+            if (served?.key === currentSessionKey && served.serial === request.serial) return;
+            showPositionTarget(linkTarget(request, scrollNode), scrollNode, currentSessionKey, null, null);
+        };
+        showRequested();
+        return subscribeMessageFocus(showRequested);
+    }, [currentSessionKey, scrollNode, showPositionTarget]);
+
+    React.useEffect(() => {
+        if (pinned || !scrollNode || !currentSessionKey) return;
+        const showRequested = () => {
+            if (scrollRef.current !== scrollNode || handledEntryKeyRef.current !== currentSessionKey) return;
+            const pageId = pendingWaitingPageID();
+            if (!takeWaitingPageReveal(currentSessionIdRef.current)) return;
+            restoreRef.current?.cancel();
+            jumpToEnd('instant', true);
+            revealedPagesRef.current.clear();
+            const block = findWaitingPage(scrollNode, pageId);
+            if (pageId === null || !block) {
+                dispatchPageWaiting(block);
+                return;
+            }
+            revealedPagesRef.current.add(pageId);
+            pageRevealRef.current = { pageId, block, generation: userGenerationRef.current, until: performance.now() + PAGE_REVEAL_SETTLE_MS };
+            revealWaitingPageRef.current();
+        };
+        showRequested();
+        return subscribeRequestReveal(showRequested);
+    }, [currentSessionKey, jumpToEnd, pinned, scrollNode]);
+
     React.useEffect(() => {
         if (!scrollNode) return;
         const glide = createKeyboardFollowGlide({
@@ -704,93 +1182,149 @@ export const useChatTimelineScroll = ({
         };
     }, [scrollNode]);
 
-    // ── pinned end ──────────────────────────────────────────────────────────
-    // "At the end" is an invariant, not a one-time scroll: while the reader
-    // sits on the end of a session that is not producing output, any growth
-    // of the content (a footer that decides to render, a row re-measured)
-    // keeps the end in view with one instant write. Output growth belongs to
-    // followEnd, which glides. A width resize is the one case handled for a
-    // streaming reader as well — see the resize observer above.
+    const followLandedRef = React.useRef<() => void>(() => {});
+    const followYieldsRef = React.useRef(0);
     React.useEffect(() => {
-        if (!scrollNode || typeof MutationObserver === 'undefined') return;
+        if (!scrollNode) return;
+        const glide = createFollowGlide({
+            node: scrollNode,
+            native: drawsScrollInWholePixels(),
+            shouldContinue: () => scrollRef.current === scrollNode && !followGlideHeld(),
+            onSettle: () => followLandedRef.current(),
+            onYield: () => {
+                if (followYieldsRef.current >= 2) return;
+                followYieldsRef.current += 1;
+                followLandedRef.current();
+            },
+        });
+        liveGlideRef.current = glide;
+        return () => {
+            glide.dispose();
+            if (liveGlideRef.current === glide) liveGlideRef.current = null;
+        };
+    }, [scrollNode]);
+
+    React.useEffect(() => {
+        if (!scrollNode || !globalThis.MutationObserver) return;
         const content = scrollNode.firstElementChild;
         if (!content) return;
         const pin = () => {
             if (userOwnsScrollRef.current || !isAtEndRef.current || modeRef.current !== 'following-end') return;
             if (followGlideHeld()) return;
-            if (widthResizingRef.current) {
-                // Re-wrapping rows: the scroll node's scrollHeight carries the
-                // list's stale total, so the end is the measured bottom of the
-                // last real row. Held for a streaming reader too — output
-                // growth is not what moves the viewport during a resize.
+            if (widthResizingRef.current || isLayoutAnimating()) {
                 const state = listRef.current?.getState();
-                const offset = state
+                const measured = state
                     ? resolveRealContentEndOffset({
                         state,
-                        composerOverlayHeight: composerOverlayHeightRef.current,
+                        headerSize: listHeaderSizeRef.current,
                         footerSize: listFooterSizeRef.current,
                     })
                     : null;
+                const offset = measured === null ? null : measured + (pinnedThroughAnimationRef.current ? animationEndCorrectionRef.current : 0);
                 if (offset !== null && Math.abs(offset - scrollNode.scrollTop) > 1) {
                     scrollNode.scrollTop = offset;
                 }
                 return;
             }
-            if (sessionIsWorkingRef.current) return;
-            const end = scrollNode.scrollHeight - scrollNode.clientHeight;
-            if (end - scrollNode.scrollTop > 1) scrollNode.scrollTop = end;
+            if (isLive()) {
+                if (streamingAutoFollowEnabledRef.current) followEnd();
+                return;
+            }
+            pinEndAtRest(scrollNode);
         };
-        // A MutationObserver runs as a microtask right after the list writes
-        // its layout (row positions, container height), before the frame is
-        // painted, so the pin lands in the same frame as the growth. A
-        // ResizeObserver would only see the container a rendering step later
-        // and let one frame paint with the end out of view.
-        const mutations = new MutationObserver(pin);
+        const grew = () => {
+            followYieldsRef.current = 0;
+            pin();
+        };
+        const mutations = new MutationObserver(grew);
         mutations.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
-        const resizes = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(pin);
+        const resizes = globalThis.ResizeObserver ? new ResizeObserver(grew) : null;
         resizes?.observe(content);
-        // The viewport itself shrinking (window height, a panel docked below)
-        // moves the end out of view just like content growth does.
         resizes?.observe(scrollNode);
+        followLandedRef.current = () => {
+            if (userOwnsScrollRef.current || !isAtEndRef.current || modeRef.current !== 'following-end') return;
+            const remaining = scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop;
+            if (remaining <= 1) return;
+            if (remaining <= FOLLOW_LANDING_SNAP_MAX_PX) {
+                scrollNode.scrollTop += remaining;
+                return;
+            }
+            pin();
+        };
         return () => {
             mutations.disconnect();
             resizes?.disconnect();
+            followLandedRef.current = () => {};
+        };
+    }, [followEnd, pinEndAtRest, scrollNode]);
+
+    React.useEffect(() => {
+        if (!scrollNode) return;
+        let startGeneration = 0;
+        const settle = () => {
+            if (!pinnedThroughAnimationRef.current) return;
+            pinnedThroughAnimationRef.current = false;
+            if (userGenerationRef.current !== startGeneration || userOwnsScrollRef.current) return;
+            isAtEndRef.current = true;
+            modeRef.current = 'following-end';
+            const state = listRef.current?.getState();
+            const offset = state
+                ? resolveRealContentEndOffset({
+                    state,
+                    headerSize: listHeaderSizeRef.current,
+                    footerSize: listFooterSizeRef.current,
+                })
+                : null;
+            const end = offset === null ? scrollNode.scrollHeight - scrollNode.clientHeight : offset + animationEndCorrectionRef.current;
+            if (Math.abs(end - scrollNode.scrollTop) > 1) scrollNode.scrollTop = end;
+        };
+        const release = onLayoutAnimationStart(() => {
+            if (userOwnsScrollRef.current || !isAtEndRef.current || modeRef.current !== 'following-end') return;
+            const state = listRef.current?.getState();
+            const measured = state
+                ? resolveRealContentEndOffset({
+                    state,
+                    headerSize: listHeaderSizeRef.current,
+                    footerSize: listFooterSizeRef.current,
+                })
+                : null;
+            const correction = measured === null ? 0 : scrollNode.scrollTop - measured;
+            animationEndCorrectionRef.current = Math.abs(correction) <= ANIMATION_END_CORRECTION_MAX_PX ? correction : 0;
+            pinnedThroughAnimationRef.current = true;
+            startGeneration = userGenerationRef.current;
+            runWhenLayoutSettled(settle);
+        });
+        return () => {
+            release();
+            cancelWhenLayoutSettled(settle);
+            pinnedThroughAnimationRef.current = false;
         };
     }, [scrollNode]);
 
-    // ── session lifecycle ───────────────────────────────────────────────────
-    const lastSessionKeyRef = React.useRef<string | null>(null);
     React.useEffect(() => {
-        if (!currentSessionId || !currentSessionKey || currentSessionKey === lastSessionKeyRef.current) {
-            return;
-        }
-        lastSessionKeyRef.current = currentSessionKey;
-        MessageFreshnessDetector.getInstance().recordSessionStart(currentSessionId);
-        // Persist the outgoing session's position before the new one takes over.
-        flushSave();
-        isAtEndRef.current = true;
-        setUserOwnsScroll(false);
-        setViewportAtEnd(true);
-        modeRef.current = 'following-end';
-        liveFollowGenerationRef.current = userGenerationRef.current;
-        hideScrollButton();
-    }, [currentSessionId, currentSessionKey, flushSave, hideScrollButton]);
+        if (!scrollNode) return;
+        const settle = () => scrollNode.removeAttribute('data-columns-moving');
+        const release = onWidthDragStart(() => {
+            scrollNode.setAttribute('data-columns-moving', '');
+            runWhenLayoutSettled(settle);
+        });
+        return () => {
+            release();
+            cancelWhenLayoutSettled(settle);
+            settle();
+        };
+    }, [scrollNode]);
 
-    // Suppress the overlay scrollbar thumb while automatic movement owns the
-    // scroll position, so it does not jump on each correction.
     React.useEffect(() => {
         setIsFollowingProgrammatically(!showScrollButton && !userOwnsScroll);
     }, [showScrollButton, userOwnsScroll]);
 
     React.useEffect(() => () => {
         cancelShowButtonTimer();
-        if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
-    }, [cancelShowButtonTimer]);
+        clearGoToBottomReasserts();
+        restoreRef.current?.cancel();
+    }, [cancelShowButtonTimer, clearGoToBottomReasserts]);
 
-    // ── active-turn spy ─────────────────────────────────────────────────────
-    // Reads turn positions straight from the DOM, so it is unaffected by which
-    // list implementation owns the container. Rows mounting and unmounting
-    // during virtualized scrolling are tracked through the mutation observer.
     React.useEffect(() => {
         if (!onActiveTurnChange) return;
         const container = scrollNode;
@@ -806,31 +1340,27 @@ export const useChatTimelineScroll = ({
         });
         spy.setContainer(container);
 
-        const elementByTurnId = new Map<string, HTMLElement>();
+        const TURN_ROW_SELECTOR = '[data-turn-id], [data-turn-row]';
+        const turnIdOfRow = (node: HTMLElement) => node.dataset.turnId ?? node.dataset.turnRow;
         const registerTurnNode = (node: HTMLElement) => {
-            const turnId = node.dataset.turnId;
+            const turnId = turnIdOfRow(node);
             if (!turnId) return false;
-            elementByTurnId.set(turnId, node);
             spy.register(node, turnId);
             return true;
         };
         const unregisterTurnNode = (node: HTMLElement) => {
-            const turnId = node.dataset.turnId;
-            if (!turnId) return false;
-            if (elementByTurnId.get(turnId) !== node) return false;
-            elementByTurnId.delete(turnId);
-            spy.unregister(turnId);
+            spy.unregister(node);
             return true;
         };
         const collectTurnNodes = (node: Node): HTMLElement[] => {
             if (!(node instanceof HTMLElement)) return [];
             const collected: HTMLElement[] = [];
-            if (node.matches('[data-turn-id]')) collected.push(node);
-            node.querySelectorAll<HTMLElement>('[data-turn-id]').forEach((el) => collected.push(el));
+            if (node.matches(TURN_ROW_SELECTOR)) collected.push(node);
+            node.querySelectorAll<HTMLElement>(TURN_ROW_SELECTOR).forEach((el) => collected.push(el));
             return collected;
         };
 
-        container.querySelectorAll<HTMLElement>('[data-turn-id]').forEach(registerTurnNode);
+        container.querySelectorAll<HTMLElement>(TURN_ROW_SELECTOR).forEach(registerTurnNode);
         spy.markDirty();
 
         const mutationObserver = new MutationObserver((records) => {
@@ -866,17 +1396,17 @@ export const useChatTimelineScroll = ({
         scrollNode,
         isPinned,
         registerList,
+        captureOutgoingPosition,
         onIsAtEndChange,
         onListMetricsChange,
         onManualNavigation,
         onTimelineDataChange,
         showScrollButton,
         userOwnsScroll,
-        viewportAtEnd,
+        nearContentStart,
         isFollowingProgrammatically,
         goToBottom,
         scrollToBottomOnSend,
-        saveSnapshotNow,
         restoreSnapshot,
     };
 };

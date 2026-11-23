@@ -16,9 +16,11 @@ import {
   type SpaceIdleStop,
   type SpacesSwitchChange,
 } from '@/lib/spaces/spaces-api';
-import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation';
+import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation-requests';
 import { resetSpaceModelAccess } from '@/lib/spaces/space-model-access';
-import { refreshSpacesJourney, useSpacesStore } from '@/lib/spaces/spaces-store';
+import { refreshSpacesJourney, spacesWithoutProject, useSpacesJourneyRead, useSpacesStore } from '@/lib/spaces/spaces-store';
+import { SpaceRow } from '@/components/session/spaces/SpaceRow';
+import { SpacePlacesSettings } from './SpacePlacesSettings';
 import { useUIStore } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
 import {
@@ -33,17 +35,10 @@ import {
 
 const DEFAULT_IDLE_HOURS = 4;
 
-/**
- * The idle stop (decision 11): a space stops itself after this many hours with no session working,
- * and keeps its files. The host keeps the setting and tells every running space at once; this row
- * shows what the host answered. Rendered only while the switch is on, because the route exists
- * only then (decision 19).
- */
 const SpaceIdleStopSettings: React.FC = () => {
   const { t } = useI18n();
   const [setting, setSetting] = React.useState<SpaceIdleStop | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
-  // Only the answer to the latest change may set what the row shows.
   const latest = React.useRef(0);
 
   React.useEffect(() => {
@@ -72,7 +67,7 @@ const SpaceIdleStopSettings: React.FC = () => {
   };
 
   if (loadFailed) {
-    return <p className="pl-6 typography-ui-label text-[var(--status-error)]">{t('settings.openchamber.spaces.idleStop.loadFailed')}</p>;
+    return <p className="ps-6 typography-ui-label text-[var(--status-error)]">{t('settings.openchamber.spaces.idleStop.loadFailed')}</p>;
   }
   if (!setting) return null;
 
@@ -95,7 +90,6 @@ const SpaceIdleStopSettings: React.FC = () => {
               min={SPACE_IDLE_STOP_MIN_HOURS}
               max={SPACE_IDLE_STOP_MAX_HOURS}
               step={1}
-              // Typing "12" must not save 1 on the way and send it to every running space.
               deferExternalValueWhileFocused
               aria-label={t('settings.openchamber.spaces.idleStop.afterAria')}
               className={cn(SETTINGS_NUMBER_INPUT_CLASS, 'tabular-nums')}
@@ -120,18 +114,23 @@ const SpaceIdleStopSettings: React.FC = () => {
   );
 };
 
-// What turning the switch off would do, asked of the host before it happens (decision 18): stop
-// that many running spaces, or the list could not be read.
 type TurnOffNotice = { kind: 'stops'; count: number } | { kind: 'unknown' };
 
-/**
- * The switch of the isolated-spaces feature, live through the host's switch route: turning it on
- * makes the feature exist now, turning it off stops every running space and keeps its files. When
- * there is something to stop, or the host cannot say what runs, a notice says so before anything
- * happens, and a space that could not be stopped is named afterwards. Removing spaces is never
- * part of this. Never mounted in VS Code (decision 16), and nowhere until the feature is
- * released, see `lib/spaces/release.ts`.
- */
+const SpacesWithoutProject: React.FC = () => {
+  const { t } = useI18n();
+  const isMobile = useUIStore((state) => state.isMobile);
+  const { journey } = useSpacesJourneyRead();
+  const spaces = journey ? spacesWithoutProject(journey).filter((entry) => entry.state !== 'missing') : [];
+  if (spaces.length === 0) return null;
+  return (
+    <SettingsSection title={t('settings.openchamber.spaces.withoutProject.title')}>
+      <div className="space-y-1">
+        {spaces.map((entry) => <SpaceRow key={entry.id} entry={entry} actions={isMobile ? 'sheet' : 'menu'} showFolder />)}
+      </div>
+    </SettingsSection>
+  );
+};
+
 export const IsolatedSpacesSettings: React.FC = () => {
   const { t } = useI18n();
   const enabled = useUIStore((state) => state.isolatedSpacesEnabled);
@@ -141,7 +140,6 @@ export const IsolatedSpacesSettings: React.FC = () => {
   const [outcome, setOutcome] = React.useState<SpacesSwitchChange | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
-  // The host holds the switch; the setting this window remembers can be older than it.
   React.useEffect(() => {
     const controller = new AbortController();
     readSpacesSwitch(controller.signal).then((state) => setEnabled(state.enabled), () => undefined);
@@ -198,34 +196,43 @@ export const IsolatedSpacesSettings: React.FC = () => {
       : t('settings.openchamber.spaces.turnOff.stopsPlural', { count: notice?.count ?? 0 });
 
   return (
-    <SettingsSection title={t('settings.openchamber.spaces.title')}>
-      <div className={SETTINGS_OPTION_STACK_CLASS}>
-        <SettingsCheckboxRow
-          settingsItem="general.isolated-spaces"
-          checked={enabled}
-          disabled={busy || notice !== null}
-          onChange={(next) => void handleChange(next)}
-          label={t('settings.openchamber.spaces.field.enabled')}
-          ariaLabel={t('settings.openchamber.spaces.field.enabledAria')}
-          info={t('settings.openchamber.spaces.field.enabledInfo')}
-        />
-        {notice ? (
-          <div className="space-y-2 pl-6" role="alert">
-            <p className="typography-ui-label text-[var(--status-warning)]">{noticeText}</p>
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => setNotice(null)}>{t('settings.openchamber.spaces.turnOff.cancel')}</Button>
-              <Button size="sm" disabled={busy} onClick={() => void change(false)}>{t('settings.openchamber.spaces.turnOff.confirm')}</Button>
+    <>
+      <SettingsSection>
+        <div className={SETTINGS_OPTION_STACK_CLASS}>
+          <SettingsCheckboxRow
+            settingsItem="general.isolated-spaces"
+            checked={enabled}
+            disabled={busy || notice !== null}
+            onChange={(next) => void handleChange(next)}
+            label={t('settings.openchamber.spaces.field.enabled')}
+            ariaLabel={t('settings.openchamber.spaces.field.enabledAria')}
+            description={enabled ? undefined : t('settings.openchamber.spaces.field.enabledInfo')}
+            info={enabled ? t('settings.openchamber.spaces.field.enabledInfo') : undefined}
+          />
+          {notice ? (
+            <div className="space-y-2 ps-6" role="alert">
+              <p className="typography-ui-label text-[var(--status-warning)]">{noticeText}</p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setNotice(null)}>{t('settings.openchamber.spaces.turnOff.cancel')}</Button>
+                <Button size="sm" disabled={busy} onClick={() => void change(false)}>{t('settings.openchamber.spaces.turnOff.confirm')}</Button>
+              </div>
             </div>
-          </div>
-        ) : null}
-        {outcome?.stillRunning.map((space) => (
-          <p key={space.id} className="pl-6 typography-ui-label text-[var(--status-warning)]">
-            {t('settings.openchamber.spaces.turnOff.stillRunning', { name: space.name, reason: spaceFailureText(t, space) })}
-          </p>
-        ))}
-        {error ? <p className="pl-6 typography-ui-label text-[var(--status-error)]">{error}</p> : null}
-        {enabled ? <SpaceIdleStopSettings /> : null}
-      </div>
-    </SettingsSection>
+          ) : null}
+          {outcome?.stillRunning.map((space) => (
+            <p key={space.id} className="ps-6 typography-ui-label text-[var(--status-warning)]">
+              {t('settings.openchamber.spaces.turnOff.stillRunning', { name: space.name, reason: spaceFailureText(t, space) })}
+            </p>
+          ))}
+          {error ? <p className="ps-6 typography-ui-label text-[var(--status-error)]">{error}</p> : null}
+          {enabled ? <SpaceIdleStopSettings /> : null}
+        </div>
+      </SettingsSection>
+      {enabled ? (
+        <SettingsSection title={t('settings.openchamber.spaces.places.title')}>
+          <SpacePlacesSettings />
+        </SettingsSection>
+      ) : null}
+      {enabled ? <SpacesWithoutProject /> : null}
+    </>
   );
 };

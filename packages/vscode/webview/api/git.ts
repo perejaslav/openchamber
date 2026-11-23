@@ -1,117 +1,208 @@
-/**
- * VS Code Git API implementation
- * Uses bridge messages to communicate with the extension host
- */
-
-import { z } from 'zod';
-import { sendBridgeMessage } from './bridge';
-import { GitPathUnavailableError, gitSubmoduleStateSchema } from '@openchamber/ui/lib/api/git-path-diff';
+import { BridgeRequestError, sendBridgeMessage, sendBridgeMessageWithOptions } from './bridge';
+import { GIT_REPOSITORY_UNREADABLE, GitRepositoryUnreadableError } from '@openchamber/ui/lib/gitRepositoryUnreadable';
+import { GitNetworkOperationRequestError } from '@openchamber/ui/lib/api/types';
+import { gitIdentityProfilesSchema } from '@openchamber/ui/lib/api/git-identity';
+import { readRepositoryContext, readRepositoryRemotes } from './git-remotes';
 import type {
   GitAPI,
   GitStatus,
-  GitPathDiffResponse,
-  GetGitDiffOptions,
-  GitFileDiffResponse,
-  GetGitFileDiffOptions,
   GitBranch,
   GitDeleteBranchPayload,
-  GitDeleteRemoteBranchPayload,
   GitRemoveRemotePayload,
-  GeneratedCommitMessage,
-  GeneratedPullRequestDescription,
   GitWorktreeInfo,
   GitWorktreeBootstrapStatus,
   CreateGitWorktreePayload,
   GitWorktreeValidationResult,
   GitWorktreeCreateResult,
   RemoveGitWorktreePayload,
+  TeardownGitWorktreePayload,
   GitWorktreeSnapshotPayload,
   GitWorktreeSnapshotResult,
-  GitCommitResult,
-  CreateGitCommitOptions,
-  GitPushResult,
-  GitPullResult,
-  GitLogResponse,
-  GitLogOptions,
-  GitCommitFilesResponse,
-  CommitFileDiffResponse,
-  GitIdentitySummary,
   GitIdentityProfile,
   GitRemote,
-  GitRebaseResult,
-  GitMergeResult,
-  CheckoutCommitResponse,
-  CherryPickResponse,
-  RevertCommitResponse,
-  ResetToCommitResponse,
+  GitContributorDestinationCandidates,
+  GitNetworkOperation,
+  GitNetworkOperationError,
+  GitNetworkOperationPlan,
+  GitNetworkOperationRequest,
+  GitNetworkOperationTarget,
+  GitNetworkTransport,
+  GitNetworkTransportMode,
 } from '@openchamber/ui/lib/api/types';
 
 const requestWorktreeBootstrapStatus = (directory: string): Promise<GitWorktreeBootstrapStatus> => {
   return sendBridgeMessage<GitWorktreeBootstrapStatus>('api:git/worktrees/bootstrap-status', { directory });
 };
 
-type GitIdentityStoreState = {
-  profiles: GitIdentityProfile[];
+const removeWorktreeThroughBridge = (directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }> => (
+  sendBridgeMessageWithOptions<{ success: boolean }>('api:git/worktrees', {
+    directory,
+    method: 'DELETE',
+    body: {
+      directory: payload.directory,
+      deleteLocalBranch: payload.deleteLocalBranch === true,
+      teardownCommand: payload.teardownCommand,
+    },
+  }, { timeoutMs: 0 })
+);
+
+let storedProfiles: GitIdentityProfile[] = [];
+
+const readStoredProfiles = (): GitIdentityProfile[] => storedProfiles;
+
+const writeStoredProfiles = (profiles: GitIdentityProfile[]): void => {
+  storedProfiles = gitIdentityProfilesSchema.parse(profiles);
 };
 
-type GitIdentityStoreApi = {
-  getState: () => GitIdentityStoreState;
-  setState: (
-    nextState: GitIdentityStoreState | ((state: GitIdentityStoreState) => GitIdentityStoreState),
-    replace?: boolean
-  ) => void;
+const VSCODE_GIT_UNSUPPORTED_MESSAGE = 'Only remote branch deletion is supported as a Git network operation in the VS Code runtime';
+
+const unsupportedNetworkOperation = async (): Promise<never> => {
+  throw new GitNetworkOperationRequestError('RUNTIME_UNSUPPORTED', VSCODE_GIT_UNSUPPORTED_MESSAGE, 501);
 };
 
-const getGitIdentityStore = (): GitIdentityStoreApi | undefined => (
-  window as Window & {
-    __zustand_git_identities_store__?: GitIdentityStoreApi;
+const invalidNetworkRequest = (message: string): never => {
+  throw new GitNetworkOperationRequestError('INVALID_REQUEST', message, 400);
+};
+
+const SYSTEM_TRANSPORT: GitNetworkTransport = {
+  mode: 'system',
+  verification: { status: 'unverified', reason: 'system-credentials' },
+};
+const RUNTIME_IDENTITY = { id: 'vscode-webview', platform: 'vscode', label: 'VS Code Extension' } as const;
+const OPERATION_HISTORY_LIMIT = 100;
+
+type CompatibilityNetworkRequest = Extract<GitNetworkOperationRequest, { operation: 'delete-remote-branch' }>;
+
+type CompatibilityOperation = {
+  request: CompatibilityNetworkRequest;
+  snapshot: GitNetworkOperation;
+  execution: Promise<GitNetworkOperation> | null;
+};
+
+type CompatibilityBridgePayload = {
+  directory: string;
+  remote: string;
+  branch?: string;
+};
+
+type StepOutcome = { ok: true } | { ok: false; message: string };
+
+const operations = new Map<string, CompatibilityOperation>();
+
+const isTerminal = (state: GitNetworkOperation['state']): boolean => state !== 'planned' && state !== 'running';
+
+const pruneOperations = (): void => {
+  for (const [operationId, entry] of operations) {
+    if (operations.size <= OPERATION_HISTORY_LIMIT) return;
+    if (isTerminal(entry.snapshot.state)) operations.delete(operationId);
   }
-).__zustand_git_identities_store__;
+};
 
-// The extension host answers diff requests with an explicit result; see
-// `src/gitPathDiff.ts`.
-const unavailablePathSchema = z.object({
-  kind: z.literal('unavailable'),
-  reason: z.enum(['path_not_found', 'nested_repository']),
-  message: z.string(),
+const requireOperation = (operationId: string): CompatibilityOperation => {
+  const entry = operations.get(operationId);
+  if (!entry) throw new GitNetworkOperationRequestError('NOT_FOUND', 'Git network operation not found', 404);
+  return entry;
+};
+
+const requireSystemTransport = (mode: GitNetworkTransportMode): void => {
+  if (mode !== 'system') invalidNetworkRequest('VS Code Git transport is limited to system Git credentials');
+};
+
+const headBranch = (ref: string): string => {
+  const match = /^refs\/heads\/(.+)$/.exec(ref);
+  return match ? match[1] : invalidNetworkRequest(`Unsupported Git ref: ${ref}`);
+};
+
+const buildTarget = (request: CompatibilityNetworkRequest): GitNetworkOperationTarget => {
+  requireSystemTransport(request.transportMode);
+  headBranch(request.destinationRef);
+  return {
+    operation: 'delete-remote-branch',
+    repositoryId: request.repositoryId,
+    bindingRevision: request.bindingRevision,
+    configRevision: request.configRevision,
+    remote: request.remote,
+    destinationRef: request.destinationRef,
+  };
+};
+
+const snapshotBase = (snapshot: GitNetworkOperation) => ({
+  operationId: snapshot.operationId,
+  runtimeIdentity: snapshot.runtimeIdentity,
+  transport: snapshot.transport,
+  target: snapshot.target,
 });
-const pathDiffBridgeSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('diff'), diff: z.string(), submodule: gitSubmoduleStateSchema.nullable() }),
-  unavailablePathSchema,
-]);
-const fileDiffBridgeSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('file-diff'), original: z.string(), modified: z.string(), path: z.string(), submodule: gitSubmoduleStateSchema.nullable() }),
-  unavailablePathSchema,
-]);
+
+const runBridgeStep = async (type: string, payload: CompatibilityBridgePayload): Promise<StepOutcome> => {
+  try {
+    const result = await sendBridgeMessageWithOptions<{ success?: boolean } | undefined>(type, payload, { timeoutMs: 0 });
+    return result?.success === false ? { ok: false, message: 'Git command reported failure' } : { ok: true };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+const transportFailure = (message: string): GitNetworkOperationError<'TRANSPORT_FAILED'> => ({ code: 'TRANSPORT_FAILED', message });
+
+const revalidatePlannedRemotes = async (request: CompatibilityNetworkRequest): Promise<GitNetworkOperationError<'STALE_REPOSITORY' | 'STALE_CONFIG' | 'REMOTE_CHANGED'> | null> => {
+  const current = await readRepositoryContext(request.directory);
+  if (current.repositoryId !== request.repositoryId) {
+    return { code: 'STALE_REPOSITORY', message: 'The repository changed since this operation was planned' };
+  }
+  const remote = current.remotes.find((candidate) => candidate.name === request.remote.name);
+  if (!remote || remote.push.fingerprint !== request.remote.endpoint.fingerprint) {
+    return { code: 'REMOTE_CHANGED', message: `Remote ${request.remote.name} changed since this operation was planned` };
+  }
+  if (current.configRevision !== request.configRevision) {
+    return { code: 'STALE_CONFIG', message: 'Remote configuration changed since this operation was planned' };
+  }
+  return null;
+};
+
+const runCompatibilityOperation = async (entry: CompatibilityOperation): Promise<GitNetworkOperation> => {
+  const { request } = entry;
+  const base = snapshotBase(entry.snapshot);
+  const directory = request.directory;
+
+  let stale: Awaited<ReturnType<typeof revalidatePlannedRemotes>>;
+  try {
+    stale = await revalidatePlannedRemotes(request);
+  } catch (error) {
+    return {
+      ...base, state: 'failed', completedSteps: [],
+      error: { code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) },
+    };
+  }
+  if (stale) return { ...base, state: 'conflicted', completedSteps: [], error: stale };
+
+  const outcome = await runBridgeStep('api:git/remote-branches', {
+    directory, remote: request.remote.name, branch: headBranch(request.destinationRef),
+  });
+
+  if (!outcome.ok) {
+    return { ...base, state: 'failed', completedSteps: ['validated'], error: transportFailure(outcome.message) };
+  }
+  return {
+    ...base,
+    state: 'succeeded',
+    completedSteps: ['validated', 'transferred'],
+  };
+};
 
 export const createVSCodeGitAPI = (): GitAPI => ({
   checkIsGitRepository: async (directory: string): Promise<boolean> => {
-    return sendBridgeMessage<boolean>('api:git/check', { directory });
+    try {
+      return await sendBridgeMessage<boolean>('api:git/check', { directory });
+    } catch (error) {
+      if (error instanceof BridgeRequestError && error.code === GIT_REPOSITORY_UNREADABLE) {
+        throw new GitRepositoryUnreadableError(error.message);
+      }
+      throw error;
+    }
   },
 
   getGitStatus: async (directory: string, options?: { mode?: 'light'; fresh?: boolean }): Promise<GitStatus> => {
     return sendBridgeMessage<GitStatus>('api:git/status', { directory, mode: options?.mode });
-  },
-
-  getGitDiff: async (directory: string, options: GetGitDiffOptions): Promise<GitPathDiffResponse> => {
-    const result = pathDiffBridgeSchema.parse(await sendBridgeMessage<unknown>('api:git/diff', {
-      directory,
-      path: options.path,
-      staged: options.staged,
-      contextLines: options.contextLines,
-    }));
-    if (result.kind === 'unavailable') throw new GitPathUnavailableError(result.message, result.reason);
-    return { diff: result.diff, submodule: result.submodule };
-  },
-
-  getGitFileDiff: async (directory: string, options: GetGitFileDiffOptions): Promise<GitFileDiffResponse> => {
-    const result = fileDiffBridgeSchema.parse(await sendBridgeMessage<unknown>('api:git/file-diff', {
-      directory,
-      path: options.path,
-      staged: options.staged,
-    }));
-    if (result.kind === 'unavailable') throw new GitPathUnavailableError(result.message, result.reason);
-    return { original: result.original, modified: result.modified, path: result.path, submodule: result.submodule };
   },
 
   revertGitFile: async (directory: string, filePath: string, options?: { scope?: 'all' | 'working' }): Promise<void> => {
@@ -167,13 +258,6 @@ export const createVSCodeGitAPI = (): GitAPI => ({
     });
   },
 
-  deleteRemoteBranch: async (directory: string, payload: GitDeleteRemoteBranchPayload): Promise<{ success: boolean }> => {
-    return sendBridgeMessage<{ success: boolean }>('api:git/remote-branches', {
-      directory,
-      branch: payload.branch,
-      remote: payload.remote,
-    });
-  },
 
   removeRemote: async (directory: string, payload: GitRemoveRemotePayload): Promise<{ success: boolean }> => {
     return sendBridgeMessage<{ success: boolean }>('api:git/remotes', {
@@ -183,43 +267,12 @@ export const createVSCodeGitAPI = (): GitAPI => ({
     });
   },
 
-  generateCommitMessage: async (
-    directory: string,
-    files: string[],
-    options?: { zenModel?: string; providerId?: string; modelId?: string }
-  ): Promise<{ message: GeneratedCommitMessage }> => {
-    // This requires AI integration - stubbed for now
-    void directory; // Unused for now
-    void files; // Unused for now
-    void options; // Unused for now
-    return {
-      message: {
-        subject: '',
-        highlights: [],
-      },
-    };
-  },
-
-  generatePullRequestDescription: async (
-    directory: string,
-    payload: { base: string; head: string; context?: string; zenModel?: string; providerId?: string; modelId?: string }
-  ): Promise<GeneratedPullRequestDescription> => {
-    return sendBridgeMessage<GeneratedPullRequestDescription>('api:git/pr-description', {
-      directory,
-      base: payload.base,
-      head: payload.head,
-      context: payload.context,
-      zenModel: payload.zenModel,
-      providerId: payload.providerId,
-      modelId: payload.modelId,
-    });
-  },
-
   listGitWorktrees: async (directory: string): Promise<GitWorktreeInfo[]> => {
     return sendBridgeMessage<GitWorktreeInfo[]>('api:git/worktrees', { directory, method: 'GET' });
   },
 
   validateGitWorktree: async (directory: string, payload: CreateGitWorktreePayload): Promise<GitWorktreeValidationResult> => {
+    if (payload.changeRequestSource || payload.ensureRemoteUrl) return unsupportedNetworkOperation();
     return sendBridgeMessage<GitWorktreeValidationResult>('api:git/worktrees/validate', {
       directory,
       ...(payload || {}),
@@ -231,6 +284,7 @@ export const createVSCodeGitAPI = (): GitAPI => ({
   },
 
   previewGitWorktree: async (directory: string, payload: CreateGitWorktreePayload): Promise<GitWorktreeCreateResult> => {
+    if (payload.changeRequestSource || payload.ensureRemoteUrl) return unsupportedNetworkOperation();
     return sendBridgeMessage<GitWorktreeCreateResult>('api:git/worktrees/preview', {
       directory,
       method: 'POST',
@@ -239,59 +293,65 @@ export const createVSCodeGitAPI = (): GitAPI => ({
   },
 
   createGitWorktree: async (directory: string, payload: CreateGitWorktreePayload): Promise<GitWorktreeCreateResult> => {
-    return sendBridgeMessage<GitWorktreeCreateResult>('api:git/worktrees', {
+    if (payload.changeRequestSource || payload.ensureRemoteUrl) return unsupportedNetworkOperation();
+    return sendBridgeMessageWithOptions<GitWorktreeCreateResult>('api:git/worktrees', {
       directory,
       method: 'POST',
       ...(payload || {}),
-    });
+    }, payload.createCommand ? { timeoutMs: 0 } : undefined);
   },
 
-  deleteGitWorktree: async (directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }> => {
-    return sendBridgeMessage<{ success: boolean }>('api:git/worktrees', {
-      directory,
-      method: 'DELETE',
-      body: {
-        directory: payload.directory,
-        deleteLocalBranch: payload.deleteLocalBranch === true,
-      },
-    });
+  deleteGitWorktree: async (directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }> => removeWorktreeThroughBridge(directory, payload),
+
+  planNetworkOperation: async (request: GitNetworkOperationRequest): Promise<GitNetworkOperationPlan> => {
+    if (request.operation !== 'delete-remote-branch') return unsupportedNetworkOperation();
+    if (!request.directory.trim()) invalidNetworkRequest('Directory is required');
+    const target = buildTarget(request);
+    const plan: GitNetworkOperationPlan = {
+      operationId: crypto.randomUUID(),
+      runtimeIdentity: RUNTIME_IDENTITY,
+      transport: SYSTEM_TRANSPORT,
+      target,
+      completedSteps: [],
+      state: 'planned',
+    };
+    operations.set(plan.operationId, { request, snapshot: plan, execution: null });
+    pruneOperations();
+    return plan;
   },
 
-  createGitCommit: async (directory: string, message: string, options?: CreateGitCommitOptions): Promise<GitCommitResult> => {
-    return sendBridgeMessage<GitCommitResult>('api:git/commit', {
-      directory,
-      message,
-      addAll: options?.addAll,
-      files: options?.files,
-      stageFiles: options?.stageFiles,
+  executeNetworkOperation: async (operationId: string): Promise<GitNetworkOperation> => {
+    const entry = requireOperation(operationId);
+    if (entry.execution) return entry.execution;
+    if (entry.snapshot.state !== 'planned') return entry.snapshot;
+    entry.snapshot = { ...snapshotBase(entry.snapshot), completedSteps: ['validated'], state: 'running' };
+    entry.execution = runCompatibilityOperation(entry).then((snapshot) => {
+      entry.snapshot = snapshot;
+      entry.execution = null;
+      return snapshot;
     });
+    return entry.execution;
   },
 
-  gitPush: async (directory: string, options?: { remote?: string; branch?: string; options?: string[] | Record<string, unknown> }): Promise<GitPushResult> => {
-    return sendBridgeMessage<GitPushResult>('api:git/push', {
-      directory,
-      remote: options?.remote,
-      branch: options?.branch,
-      options: options?.options,
-    });
+  getNetworkOperation: async (operationId: string): Promise<GitNetworkOperation> => requireOperation(operationId).snapshot,
+
+  cancelNetworkOperation: async (operationId: string): Promise<GitNetworkOperation> => {
+    const entry = requireOperation(operationId);
+    if (entry.snapshot.state === 'planned') {
+      entry.snapshot = {
+        ...snapshotBase(entry.snapshot),
+        completedSteps: [],
+        state: 'cancelled',
+        error: { code: 'CANCELLED', message: 'Git network operation was cancelled before it started' },
+      };
+    }
+    return entry.snapshot;
   },
 
-  gitPull: async (directory: string, options?: { remote?: string; branch?: string; rebase?: boolean }): Promise<GitPullResult> => {
-    return sendBridgeMessage<GitPullResult>('api:git/pull', {
-      directory,
-      remote: options?.remote,
-      branch: options?.branch,
-      rebase: options?.rebase,
-    });
-  },
-
-  gitFetch: async (directory: string, options?: { remote?: string; branch?: string }): Promise<{ success: boolean }> => {
-    return sendBridgeMessage<{ success: boolean }>('api:git/fetch', {
-      directory,
-      remote: options?.remote,
-      branch: options?.branch,
-    });
-  },
+  listContributorDestinations: async (): Promise<GitContributorDestinationCandidates> => ({ kind: 'ordinary' }),
+  issueContributorDestination: unsupportedNetworkOperation,
+  inspectCheckoutTrust: unsupportedNetworkOperation,
+  decideCheckoutTrust: unsupportedNetworkOperation,
 
   listGitStashes: async (directory: string) => sendBridgeMessage('api:git/stashes', { directory }),
   countGitStashFiles: async (directory: string, refs: string[]) => sendBridgeMessage('api:git/stashes/file-counts', { directory, refs }),
@@ -299,13 +359,6 @@ export const createVSCodeGitAPI = (): GitAPI => ({
   applyGitStash: async (directory: string, options: { ref: string }) => sendBridgeMessage('api:git/stash/apply', { directory, ref: options.ref }),
   popGitStash: async (directory: string, options: { ref: string }) => sendBridgeMessage('api:git/stash/pop', { directory, ref: options.ref }),
   dropGitStash: async (directory: string, options: { ref: string }) => sendBridgeMessage('api:git/stash/drop', { directory, ref: options.ref }),
-
-  checkoutBranch: async (directory: string, branch: string): Promise<{ success: boolean; branch: string }> => {
-    return sendBridgeMessage<{ success: boolean; branch: string }>('api:git/checkout', {
-      directory,
-      branch,
-    });
-  },
 
   createBranch: async (directory: string, name: string, startPoint?: string): Promise<{ success: boolean; branch: string }> => {
     return sendBridgeMessage<{ success: boolean; branch: string }>('api:git/branches', {
@@ -325,155 +378,24 @@ export const createVSCodeGitAPI = (): GitAPI => ({
     });
   },
 
-  getGitLog: async (directory: string, options?: GitLogOptions): Promise<GitLogResponse> => {
-    return sendBridgeMessage<GitLogResponse>('api:git/log', {
-      directory,
-      maxCount: options?.maxCount,
-      from: options?.from,
-      to: options?.to,
-      file: options?.file,
-      all: options?.all,
-    });
-  },
-
-  getCommitFiles: async (directory: string, hash: string): Promise<GitCommitFilesResponse> => {
-    return sendBridgeMessage<GitCommitFilesResponse>('api:git/commit-files', {
-      directory,
-      hash,
-    });
-  },
-
-  getCommitFileDiff: async (directory: string, hash: string, filePath: string, isBinary: boolean): Promise<CommitFileDiffResponse> => {
-    return sendBridgeMessage<CommitFileDiffResponse>('api:git/commit-file-diff', {
-      directory,
-      hash,
-      path: filePath,
-      binary: isBinary,
-    });
-  },
-
-  getCurrentGitIdentity: async (directory: string): Promise<GitIdentitySummary | null> => {
-    return sendBridgeMessage<GitIdentitySummary | null>('api:git/identity', {
-      directory,
-      method: 'GET',
-    });
-  },
-
-  setGitIdentity: async (directory: string, profileId: string): Promise<{ success: boolean; profile: GitIdentityProfile }> => {
-    const store = (window as Window & {
-      __zustand_git_identities_store__?: {
-        getState: () => {
-          getProfileById: (id: string) => GitIdentityProfile | undefined;
-        };
-      };
-    }).__zustand_git_identities_store__;
-    const profile = store?.getState().getProfileById(profileId);
-    if (!profile) {
-      return {
-        success: false,
-        profile: { id: profileId, name: '', userName: '', userEmail: '' },
-      };
-    }
-
-    const result = await sendBridgeMessage<{ success: boolean }>('api:git/identity', {
-      directory,
-      method: 'POST',
-      userName: profile.userName,
-      userEmail: profile.userEmail,
-      sshKey: profile.sshKey ?? null,
-      signCommits: profile.signCommits === true,
-      signingKey: profile.signingKey ?? null,
-    });
-
-    return {
-      success: result.success === true,
-      profile,
-    };
-  },
-
-  // Git identity profile management is backed by the webview store in VS Code.
-  getGitIdentities: async (): Promise<GitIdentityProfile[]> => {
-    return getGitIdentityStore()?.getState().profiles ?? [];
-  },
+  getGitIdentities: async (): Promise<GitIdentityProfile[]> => readStoredProfiles(),
 
   createGitIdentity: async (profile: GitIdentityProfile): Promise<GitIdentityProfile> => {
-    const store = getGitIdentityStore();
-    if (store) {
-      store.setState((state) => ({
-        profiles: [...state.profiles.filter((existing) => existing.id !== profile.id), profile],
-      }));
-    }
+    writeStoredProfiles([...readStoredProfiles().filter((entry) => entry.id !== profile.id), profile]);
     return profile;
   },
 
   updateGitIdentity: async (id: string, profile: GitIdentityProfile): Promise<GitIdentityProfile> => {
-    const store = getGitIdentityStore();
-    if (store) {
-      store.setState((state) => ({
-        profiles: state.profiles.map((existing) => (existing.id === id ? { ...existing, ...profile, id } : existing)),
-      }));
-    }
+    if (profile.id !== id) throw new Error('Git identity profile ID does not match the update target');
+    writeStoredProfiles(readStoredProfiles().map((entry) => (entry.id === id ? profile : entry)));
     return profile;
   },
 
   deleteGitIdentity: async (id: string): Promise<void> => {
-    const store = getGitIdentityStore();
-    if (store) {
-      store.setState((state) => ({
-        profiles: state.profiles.filter((existing) => existing.id !== id),
-      }));
-    }
+    writeStoredProfiles(readStoredProfiles().filter((entry) => entry.id !== id));
   },
 
-  getRemotes: async (directory: string): Promise<GitRemote[]> => {
-    return sendBridgeMessage<GitRemote[]>('api:git/remotes', { directory });
-  },
-
-  rebase: async (directory: string, options: { onto: string }): Promise<GitRebaseResult> => {
-    return sendBridgeMessage<GitRebaseResult>('api:git/rebase', {
-      directory,
-      onto: options.onto,
-    });
-  },
-
-  abortRebase: async (directory: string): Promise<{ success: boolean }> => {
-    return sendBridgeMessage<{ success: boolean }>('api:git/rebase/abort', { directory });
-  },
-
-  merge: async (directory: string, options: { branch: string }): Promise<GitMergeResult> => {
-    return sendBridgeMessage<GitMergeResult>('api:git/merge', {
-      directory,
-      branch: options.branch,
-    });
-  },
-
-  abortMerge: async (directory: string): Promise<{ success: boolean }> => {
-    return sendBridgeMessage<{ success: boolean }>('api:git/merge/abort', { directory });
-  },
-
-  continueRebase: async (directory: string): Promise<{ success: boolean; conflict: boolean; conflictFiles?: string[] }> => {
-    return sendBridgeMessage<{ success: boolean; conflict: boolean; conflictFiles?: string[] }>('api:git/rebase/continue', { directory });
-  },
-
-  continueMerge: async (directory: string): Promise<{ success: boolean; conflict: boolean; conflictFiles?: string[] }> => {
-    return sendBridgeMessage<{ success: boolean; conflict: boolean; conflictFiles?: string[] }>('api:git/merge/continue', { directory });
-  },
-
-  checkoutCommit: async (directory: string, hash: string): Promise<CheckoutCommitResponse> => {
-    return sendBridgeMessage<CheckoutCommitResponse>('api:git/checkout-commit', { directory, hash });
-  },
-
-  cherryPick: async (directory: string, hash: string): Promise<CherryPickResponse> => {
-    return sendBridgeMessage<CherryPickResponse>('api:git/cherry-pick', { directory, hash });
-  },
-
-  revertCommit: async (directory: string, hash: string): Promise<RevertCommitResponse> => {
-    return sendBridgeMessage<RevertCommitResponse>('api:git/revert-commit', { directory, hash });
-  },
-
-  resetToCommit: async (directory: string, hash: string, mode: 'soft' | 'mixed' | 'hard', force?: boolean): Promise<ResetToCommitResponse> => {
-    return sendBridgeMessage<ResetToCommitResponse>('api:git/reset-to-commit', { directory, hash, mode, force });
-  },
+  getRemotes: async (directory: string): Promise<GitRemote[]> => readRepositoryRemotes(directory),
 
   stash: async (
     directory: string,
@@ -489,14 +411,8 @@ export const createVSCodeGitAPI = (): GitAPI => ({
     return sendBridgeMessage<{ success: boolean }>('api:git/stash/pop', { directory });
   },
 
-  getConflictDetails: async (directory: string) => {
-    return sendBridgeMessage<{
-      statusPorcelain: string;
-      unmergedFiles: string[];
-      diff: string;
-      headInfo: string;
-      operation: 'merge' | 'rebase';
-    }>('api:git/conflict-details', { directory });
+  resolveRepositoryPrefix: async (directory: string): Promise<string> => {
+    return sendBridgeMessage<string>('api:git/repository-prefix', { directory });
   },
 
   validateWorktreeDirectory: async (directory: string, worktreeRoot: string): Promise<{
@@ -562,16 +478,14 @@ export const createVSCodeGitAPI = (): GitAPI => ({
         ...(payload || {}),
       });
     },
-    remove: async (directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }> => {
-      return sendBridgeMessage<{ success: boolean }>('api:git/worktrees', {
+    remove: async (directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }> => removeWorktreeThroughBridge(directory, payload),
+    teardown: async (directory: string, payload: TeardownGitWorktreePayload): Promise<{ success: boolean }> => (
+      sendBridgeMessageWithOptions<{ success: boolean }>('api:git/worktrees/teardown', {
         directory,
-        method: 'DELETE',
-        body: {
-          directory: payload.directory,
-          deleteLocalBranch: payload.deleteLocalBranch === true,
-        },
-      });
-    },
+        worktreeDirectory: payload.directory,
+        teardownCommand: payload.teardownCommand,
+      }, { timeoutMs: 0 })
+    ),
     snapshot: async (directory: string, payload: GitWorktreeSnapshotPayload): Promise<GitWorktreeSnapshotResult> => {
       return sendBridgeMessage<GitWorktreeSnapshotResult>('api:git/worktrees/snapshot', { directory, ref: payload.ref });
     },

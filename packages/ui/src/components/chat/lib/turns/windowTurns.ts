@@ -1,4 +1,4 @@
-import { isSubagentRunEntry } from '../timelineRoles';
+import { createNoticeTurnSplitter, isSkippedTimelineMessage, isTurnOpeningNotice } from '../timelineRoles';
 import type { ChatMessageEntry } from './types';
 
 const resolveMessageRole = (message: ChatMessageEntry): string => {
@@ -6,9 +6,8 @@ const resolveMessageRole = (message: ChatMessageEntry): string => {
     return typeof role === 'string' ? role : '';
 };
 
-/** A user prompt opens a turn, and so does a background subagent run (see `isSubagentRunEntry`). */
 const opensTurn = (message: ChatMessageEntry): boolean =>
-    resolveMessageRole(message) === 'user' || isSubagentRunEntry(message.info);
+    resolveMessageRole(message) === 'user' || isTurnOpeningNotice(message.info);
 
 const resolveParentMessageId = (message: ChatMessageEntry): string | undefined => {
     const parentId = (message.info as { parentID?: unknown }).parentID;
@@ -108,6 +107,11 @@ export const updateTurnWindowModelIncremental = (
         return nextModel;
     }
 
+    const previousMessage = previousMessages[previousMessages.length - 1];
+    if (role === 'assistant' && previousMessage && isSkippedTimelineMessage(previousMessage.info)) {
+        return null;
+    }
+
     if (role !== 'assistant') {
         const currentTurnIndex = nextModel.turnIds.length - 1;
         if (currentTurnIndex < 0) {
@@ -150,19 +154,28 @@ export const buildTurnWindowModel = (messages: ChatMessageEntry[]): TurnWindowMo
     const userMessageToTurnIndex = new Map<string, number>();
 
     let currentTurnIndex = -1;
+    const splitAtNotice = createNoticeTurnSplitter();
+
+    const openTurn = (messageId: string, index: number) => {
+        currentTurnIndex = turnIds.length;
+        turnIds.push(messageId);
+        turnMessageStartIndexes.push(index);
+        turnIndexById.set(messageId, currentTurnIndex);
+        userMessageToTurnIndex.set(messageId, currentTurnIndex);
+        messageToTurnId.set(messageId, messageId);
+        messageToTurnIndex.set(messageId, currentTurnIndex);
+    };
 
     messages.forEach((message, index) => {
         const role = resolveMessageRole(message);
         const messageId = message.info.id;
+        const noticeIndex = splitAtNotice(message.info, index);
+        if (noticeIndex >= 0 && currentTurnIndex >= 0) {
+            openTurn(messages[noticeIndex].info.id, noticeIndex);
+        }
 
         if (opensTurn(message)) {
-            currentTurnIndex = turnIds.length;
-            turnIds.push(messageId);
-            turnMessageStartIndexes.push(index);
-            turnIndexById.set(messageId, currentTurnIndex);
-            userMessageToTurnIndex.set(messageId, currentTurnIndex);
-            messageToTurnId.set(messageId, messageId);
-            messageToTurnIndex.set(messageId, currentTurnIndex);
+            openTurn(messageId, index);
             return;
         }
 

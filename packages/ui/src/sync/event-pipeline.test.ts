@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import type { SyncEvent } from "@/lib/opencode/events"
+import type { JsonValue } from "@/lib/opencode/model"
 import { adoptRelayTunnel, deactivateRelayTunnel } from "@/lib/relay/runtime-tunnel"
 import type { RelayTunnelClient, RelayTunnelWebSocket } from "@/lib/relay/tunnel-client"
 import { clearRuntimeUrlAuthToken, setRuntimeUrlAuthToken } from "@/lib/runtime-auth"
-import { createEventPipeline } from "./event-pipeline"
+import { useAuthSessionStore } from "@/lib/runtime-auth-expiry"
+import { classifyStreamPayload, createEventPipeline } from "./event-pipeline"
 
 const failAfter = (ms: number) => new Promise<never>((_, reject) => {
   setTimeout(() => reject(new Error("Timed out waiting for event pipeline flush")), ms)
@@ -33,7 +35,7 @@ function statusEvent(type: "busy" | "retry"): OpenCodeEvent {
 }
 
 /** A raw stream payload: wire events, or OpenChamber's own bridge events. */
-type StreamPayload = OpenCodeEvent | { type: string; properties: Record<string, string> }
+type StreamPayload = OpenCodeEvent | { type: string; properties: Record<string, JsonValue> }
 
 /** `keepalives` counts SSE comments sent before the events. They are activity without an event. */
 function createSdk(events: StreamPayload[], streamFinished: () => void, keepalives = 0): OpenCodeClient {
@@ -146,6 +148,34 @@ describe("createEventPipeline", () => {
     expect(events[0]).toEqual({ type: "session.status", properties: { sessionID: "ses_1", status: { type: "idle" } } })
   })
 
+  // Regression (#5259): the host's start reaches a client whose clock is off.
+  test("bridges the host's turn start onto this device's clock", async () => {
+    const hostNow = Date.now() + 3_600_000
+    const before = Date.now()
+    const { events } = await collect(
+      [{ type: "openchamber:session-status", properties: { sessionID: "ses_1", status: "busy", timestamp: hostNow, turnStartedAt: hostNow - 1_200_000 } as never }],
+      1,
+    )
+    const event = events[0]
+    if (event.type !== "session.status") throw new Error("expected a status event")
+    expect(event.properties.turnStart?.source).toBe("host")
+    expect(event.properties.turnStart?.at).toBeGreaterThanOrEqual(before - 1_200_000)
+    expect(event.properties.turnStart?.at).toBeLessThanOrEqual(Date.now() - 1_200_000)
+  })
+
+  test("keeps the start of a turn that began in the same flush as its next step", async () => {
+    const { events } = await collect(
+      [
+        { ...base, type: "session.execution.started", data: { sessionID: "ses_1" } } as OpenCodeEvent,
+        statusEvent("busy"),
+      ],
+      1,
+    )
+    expect(events).toHaveLength(1)
+    const event = events[0]
+    expect(event.type === "session.status" && event.properties.turnStart?.source).toBe("live")
+  })
+
   test("bridges openchamber archive announcements into session patches", async () => {
     const { events } = await collect(
       [{ type: "openchamber:session-archived", properties: { sessionID: "ses_1", archivedAt: 42 } as never }],
@@ -172,6 +202,48 @@ describe("createEventPipeline", () => {
     )
     expect(events[0]).toEqual({ type: "openchamber.notification", properties: { kind: "agent-complete", sessionId: "ses_1", title: "Done" } })
     expect(events[1]).toEqual({ type: "openchamber.permission-auto-accept", properties: { sessions: { ses_1: true }, modes: { ses_1: "safety" }, revision: 3 } })
+  })
+
+  test("passes the server's waiting-page announcements through typed", async () => {
+    const { events } = await collect(
+      [
+        { type: "openchamber:page-waiting", properties: { sessionID: "ses_1", directory: "/repo", page: { id: "call_1", title: "Pick a layout" } } as never },
+        { type: "openchamber:page-settled", properties: { sessionID: "ses_1", pageID: "call_1" } },
+      ],
+      2,
+    )
+    expect(events[0]).toEqual({ type: "openchamber.page-waiting", properties: { sessionID: "ses_1", directory: "/repo", page: { id: "call_1", title: "Pick a layout" } } })
+    expect(events[1]).toEqual({ type: "openchamber.page-settled", properties: { sessionID: "ses_1", pageID: "call_1" } })
+  })
+
+  test("passes the server's recap wait announcements through typed", async () => {
+    const { events } = await collect(
+      [
+        { type: "openchamber:session-assist", properties: { sessionID: "ses_1", directory: "/chat", pending: true } },
+        { type: "openchamber:session-assist", properties: { sessionID: "ses_1", directory: null, pending: false } },
+      ],
+      2,
+    )
+    expect(events[0]).toEqual({ type: "openchamber.session-assist", properties: { sessionID: "ses_1", directory: "/chat", pending: true } })
+    expect(events[1]).toEqual({ type: "openchamber.session-assist", properties: { sessionID: "ses_1", directory: null, pending: false } })
+  })
+
+  test("passes the server's workflow run changes through typed, and drops a malformed one", async () => {
+    const run = {
+      id: "wf_one", parentSessionId: "ses_1", directory: "/repo", name: "audit-routes", description: "Audit every route",
+      state: "running", attempt: 1, createdAt: 1, currentPhase: "Audit", phases: ["Audit"],
+      agents: [{ key: "k-1", label: "audit a", phase: "Audit", state: "running", sessionId: "ses_agent" }], logs: [],
+    }
+    const { events } = await collect(
+      [
+        { type: "openchamber:workflow-run", properties: { run: { ...run, state: "exploded" } } },
+        { type: "openchamber:workflow-run", properties: { run } },
+        { type: "openchamber:workflow-run-removed", properties: { runId: "wf_one", parentSessionId: "ses_1" } },
+      ],
+      2,
+    )
+    expect(events[0]).toEqual({ type: "openchamber.workflow-run", properties: { run } })
+    expect(events[1]).toEqual({ type: "openchamber.workflow-run-removed", properties: { runId: "wf_one", parentSessionId: "ses_1" } })
   })
 
   test("ignores payloads that are neither wire events nor bridge events", async () => {
@@ -303,6 +375,156 @@ describe("createEventPipeline", () => {
     }
     expect(activity).toBe(0)
   })
+
+  describe("while the OpenChamber session is expired", () => {
+    afterEach(() => {
+      useAuthSessionStore.getState().markAuthenticated()
+    })
+
+    /**
+     * Every attempt is refused, and the first refusal confirms the expiry. The failure carries no
+     * HTTP status, as a refused SSE request or WebSocket upgrade does in a browser, so the
+     * pipeline's normal retry backoff applies.
+     */
+    const createUnauthorizedSdk = (onAttempt: () => void): OpenCodeClient => {
+      const client: Pick<OpenCodeClient, "event"> = {
+        event: {
+          subscribe: () => ({
+            [Symbol.asyncIterator]: () => ({
+              next: async () => {
+                onAttempt()
+                useAuthSessionStore.getState().markExpired()
+                throw new Error("UI authentication required")
+              },
+            }),
+          }),
+        },
+      }
+      // SAFETY: the pipeline only touches `event.subscribe` on the client.
+      return client as OpenCodeClient
+    }
+
+    test("stops reconnecting until the user logs in, then reconnects at once", async () => {
+      let attempts = 0
+      const pipeline = createEventPipeline({
+        sdk: createUnauthorizedSdk(() => { attempts += 1 }),
+        onEvents: () => undefined,
+        transport: "sse",
+        heartbeatTimeoutMs: 60_000,
+      })
+      try {
+        // The retry backoff starts at 250 ms and doubles; three more attempts would fit here.
+        await new Promise((resolve) => setTimeout(resolve, 2_000))
+        expect(attempts).toBe(1)
+
+        useAuthSessionStore.getState().markAuthenticated()
+        for (let i = 0; i < 20 && attempts < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 5))
+        expect(attempts).toBe(2)
+      } finally {
+        pipeline.cleanup()
+      }
+    })
+
+    test("a pipeline cleaned up while waiting for the login never reconnects", async () => {
+      let attempts = 0
+      const pipeline = createEventPipeline({
+        sdk: createUnauthorizedSdk(() => { attempts += 1 }),
+        onEvents: () => undefined,
+        transport: "sse",
+        heartbeatTimeoutMs: 60_000,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      pipeline.cleanup()
+      useAuthSessionStore.getState().markAuthenticated()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(attempts).toBe(1)
+    })
+  })
+})
+
+type ExecutionType = "session.execution.started" | "session.execution.succeeded" | "session.execution.failed" | "session.deleted"
+
+/** A turn start or end as OpenCode numbers it: `seq` counts every durable event of the session. */
+function execution(type: ExecutionType, seq: number, sessionID = "ses_1"): OpenCodeEvent {
+  const data = type === "session.execution.failed"
+    ? { sessionID, error: { type: "provider.no-route", message: `failed at ${seq}` } }
+    : { sessionID }
+  // SAFETY: `data` matches the shape OpenCode publishes for each of these types.
+  return { id: `evt_${sessionID}_${seq}`, created: 1000 + seq, location: { directory: "/repo" }, type, durable: { aggregateID: sessionID, seq, version: 1 }, data } as OpenCodeEvent
+}
+
+/** `sessionID` other than `ses_1` gives a step numbered in `ses_1`'s sequence but naming another session. */
+function stepStarted(seq: number, sessionID = "ses_1"): OpenCodeEvent {
+  return {
+    ...base,
+    id: `evt_step_${seq}`,
+    type: "session.step.started",
+    durable: { aggregateID: "ses_1", seq, version: 1 },
+    data: { sessionID, assistantMessageID: `msg_${seq}`, agent: "build", model: { providerID: "p", id: "m" }, started: 1000 + seq },
+  }
+}
+
+/** What the session's turns look like downstream: a start, a failure with its text, or an end. */
+const describeTurns = (events: SyncEvent[]): string[] => events.flatMap((event) => {
+  if (event.type === "session.status") return [`${event.properties.sessionID} busy`]
+  if (event.type === "session.error") return [`${event.properties.sessionID} ${event.properties.error.message}`]
+  if (event.type === "session.idle") return [`${event.properties.sessionID} idle`]
+  return []
+})
+
+describe("createEventPipeline turn boundaries", () => {
+  test("a duplicated failure and a repeated start reach the store once", async () => {
+    const { events } = await collect([
+      execution("session.execution.started", 1),
+      execution("session.execution.failed", 2),
+      execution("session.execution.failed", 2),
+      execution("session.execution.started", 1),
+    ], 3)
+    expect(describeTurns(events)).toEqual(["ses_1 busy", "ses_1 failed at 2"])
+  })
+
+  test("a failure that arrives after the next turn started leaves that turn running", async () => {
+    const { events } = await collect([
+      execution("session.execution.started", 1),
+      stepStarted(2),
+      execution("session.execution.started", 5),
+      stepStarted(6),
+      execution("session.execution.failed", 4),
+    ], 3)
+    expect(describeTurns(events)).toEqual(["ses_1 busy"])
+    expect(events.some((event) => event.type === "session.patched" && event.properties.patch.outcome === "failed")).toBe(false)
+  })
+
+  test("a newer step protects a turn whose start this client never saw", async () => {
+    const { events } = await collect([stepStarted(6), execution("session.execution.failed", 4), stepStarted(7)], 2)
+    expect(events.map((event) => event.type)).toEqual(["message.updated", "message.updated"])
+  })
+
+  test("a session deleted and imported again under its id counts its turns anew", async () => {
+    const { events } = await collect([
+      execution("session.execution.started", 5),
+      execution("session.deleted", 6),
+      execution("session.execution.started", 1),
+      execution("session.execution.failed", 2),
+    ], 5)
+    expect(describeTurns(events)).toEqual(["ses_1 busy", "ses_1 busy", "ses_1 failed at 2"])
+  })
+
+  test("an event numbered for another session does not move that session's count", async () => {
+    const { events } = await collect([stepStarted(99, "ses_2"), execution("session.execution.started", 1), execution("session.execution.failed", 2)], 4)
+    expect(describeTurns(events)).toEqual(["ses_1 busy", "ses_1 failed at 2"])
+  })
+
+  test("the current turn's failure still ends it, in every session on its own", async () => {
+    const { events } = await collect([
+      execution("session.execution.started", 1),
+      execution("session.execution.failed", 2),
+      execution("session.execution.started", 3),
+      execution("session.execution.failed", 4),
+      execution("session.execution.failed", 1, "ses_2"),
+    ], 7)
+    expect(describeTurns(events)).toEqual(["ses_1 busy", "ses_1 failed at 2", "ses_1 busy", "ses_1 failed at 4", "ses_2 failed at 1"])
+  })
 })
 
 /** A relay tunnel socket the test drives by hand. */
@@ -349,6 +571,7 @@ describe("createEventPipeline over the WebSocket transport", () => {
       },
       getStatus: () => ({ state: "connected" }),
       subscribeStatus: () => () => undefined,
+      retry: () => undefined,
       close: () => undefined,
     }
     adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
@@ -377,5 +600,202 @@ describe("createEventPipeline over the WebSocket transport", () => {
     // The ready frame and the heartbeat frame both prove the socket is alive. Neither is an event.
     expect(activity).toBe(2)
     expect(delivered).toEqual([])
+  })
+
+  test("retries a WebSocket route that worked before, and falls back to SSE on one that never did", async () => {
+    const run = async (readyFirst: boolean) => {
+      // A socket closed before ready drops the token, so each run starts with one.
+      setRuntimeUrlAuthToken("fixture-url-token", Date.now() + 10 * 60_000)
+      const paths: string[] = []
+      const sockets: RelayTunnelWebSocket[] = []
+      const tunnel: RelayTunnelClient = {
+        async fetch() { throw new Error("the WebSocket transport must not fetch") },
+        openWebSocket(pathWithQuery) {
+          paths.push(pathWithQuery)
+          const socket = createFakeSocket()
+          sockets.push(socket)
+          return socket
+        },
+        getStatus: () => ({ state: "connected" }),
+        subscribeStatus: () => () => undefined,
+        retry: () => undefined,
+        close: () => undefined,
+      }
+      adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
+      let sseStreams = 0
+      const pipeline = createEventPipeline({
+        sdk: createSdk([], () => { sseStreams += 1 }),
+        onEvents: () => undefined,
+        transport: "auto",
+        reconnectDelayMs: 1,
+        heartbeatTimeoutMs: 60_000,
+      })
+      const nextSocket = async (count: number) => {
+        for (let i = 0; i < 400 && sockets.length < count && sseStreams === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 5))
+        return sockets[count - 1]
+      }
+      try {
+        const first = await nextSocket(1)
+        if (readyFirst) {
+          first.onmessage?.({ data: JSON.stringify({ type: "ready", cursor: "c1" }) })
+          // A socket that drops within two seconds of ready counts as unstable.
+          await new Promise((resolve) => setTimeout(resolve, 2_100))
+        }
+        first.onclose?.({ code: 1006, reason: "" })
+        const second = await nextSocket(2)
+        second?.onclose?.({ code: 1006, reason: "" })
+        // The SSE fallback starts at once; a WebSocket retry waits out its backoff.
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      } finally {
+        pipeline.cleanup()
+      }
+      return { paths, sseStreams }
+    }
+
+    const proven = await run(true)
+    expect(proven.sseStreams).toBe(0)
+    expect(proven.paths).toHaveLength(2)
+    expect(proven.paths[1]).toContain("lastEventId=c1")
+
+    const unproven = await run(false)
+    expect(unproven.paths).toHaveLength(1)
+    expect(unproven.sseStreams).toBe(1)
+  })
+
+  test("a failure replayed after the stream's upstream reconnect does not end the turn that started since", async () => {
+    let resolveSocket!: (socket: RelayTunnelWebSocket) => void
+    const opened = new Promise<RelayTunnelWebSocket>((resolve) => { resolveSocket = resolve })
+    const tunnel: RelayTunnelClient = {
+      async fetch() { throw new Error("the WebSocket transport must not fetch") },
+      openWebSocket() {
+        const socket = createFakeSocket()
+        resolveSocket(socket)
+        return socket
+      },
+      getStatus: () => ({ state: "connected" }),
+      subscribeStatus: () => () => undefined,
+      retry: () => undefined,
+      close: () => undefined,
+    }
+    adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
+    const delivered: SyncEvent[] = []
+    let resolveSentinel!: () => void
+    const sentinelDelivered = new Promise<void>((resolve) => { resolveSentinel = resolve })
+    const pipeline = createEventPipeline({
+      sdk: createSdk([], () => undefined),
+      onEvents: (_directory, batch) => {
+        delivered.push(...batch)
+        if (batch.some((event) => event.type === "message.updated")) resolveSentinel()
+      },
+      transport: "ws",
+      heartbeatTimeoutMs: 60_000,
+    })
+    const send = (socket: RelayTunnelWebSocket, payload: OpenCodeEvent) => {
+      socket.onmessage?.({ data: JSON.stringify({ type: "event", eventId: payload.id, payload }) })
+    }
+    try {
+      const socket = await opened
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready", cursor: "c0" }) })
+      send(socket, execution("session.execution.started", 1))
+      send(socket, execution("session.execution.failed", 2))
+      send(socket, execution("session.execution.started", 3))
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready", cursor: "c1" }) })
+      send(socket, execution("session.execution.failed", 2))
+      send(socket, stepStarted(4))
+      await sentinelDelivered
+    } finally {
+      pipeline.cleanup()
+    }
+    expect(describeTurns(delivered)).toEqual(["ses_1 busy", "ses_1 failed at 2", "ses_1 busy"])
+  })
+
+  test("reports which ready frames stand for a complete replay", async () => {
+    const sockets: RelayTunnelWebSocket[] = []
+    const tunnel: RelayTunnelClient = {
+      async fetch() { throw new Error("the WebSocket transport must not fetch") },
+      openWebSocket() {
+        const socket = createFakeSocket()
+        sockets.push(socket)
+        return socket
+      },
+      getStatus: () => ({ state: "connected" }),
+      subscribeStatus: () => () => undefined,
+      retry: () => undefined,
+      close: () => undefined,
+    }
+    adoptRelayTunnel({ relayUrl: "wss://relay.test", serverId: "fixture", hostEncPubJwk: {} }, tunnel)
+    const reconnects: Array<{ replayReset: boolean; replayed: boolean }> = []
+    const pipeline = createEventPipeline({
+      sdk: createSdk([], () => undefined),
+      onEvents: () => undefined,
+      onReconnect: (details) => { reconnects.push(details) },
+      transport: "ws",
+      heartbeatTimeoutMs: 1_000,
+    })
+    try {
+      for (let i = 0; i < 20 && sockets.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+      const socket = sockets[0]
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready" }) })
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready", replayed: true }) })
+      socket.onmessage?.({ data: JSON.stringify({ type: "ready", replayReset: true }) })
+    } finally {
+      pipeline.cleanup()
+    }
+    expect(reconnects).toEqual([
+      { replayReset: false, replayed: false },
+      { replayReset: false, replayed: true },
+      { replayReset: true, replayed: false },
+    ])
+  })
+})
+
+describe("classifyStreamPayload", () => {
+  test("routes authoritative space task titles and refuses malformed title records", () => {
+    const properties = { spaceId: "0123456789ab", taskTitle: { title: "Task", by: "user" } }
+    expect(classifyStreamPayload({ type: "openchamber:space-task-title.updated", properties }, undefined))
+      .toEqual({ kind: "space-task-title", properties })
+    expect(classifyStreamPayload({ type: "openchamber:space-task-title.updated", properties: { ...properties, taskTitle: { title: "Task", by: "other" } } }, undefined))
+      .toEqual({ kind: "events", events: [] })
+  })
+  test("classifies each payload kind by its type", () => {
+    expect(classifyStreamPayload(textDelta("a"), undefined)).toMatchObject({ kind: "events", events: [{ directory: "/repo" }] })
+    expect(classifyStreamPayload({ type: "openchamber:space-setup", properties: { spaceId: "0123456789ab" } }, undefined))
+      .toEqual({ kind: "space-setup", spaceId: "0123456789ab" })
+    expect(classifyStreamPayload({ type: "openchamber:space-setup", properties: { spaceId: "bad" } }, undefined))
+      .toEqual({ kind: "events", events: [] })
+    expect(classifyStreamPayload({ type: "openchamber:space-permission-stream", properties: { spaceId: "0123456789ab", status: "connected" } }, undefined))
+      .toEqual({ kind: "space-permission-stream", spaceId: "0123456789ab" })
+    expect(classifyStreamPayload({ type: "openchamber:space-permission-stream", properties: { spaceId: "bad", status: "connected" } }, undefined))
+      .toEqual({ kind: "events", events: [] })
+    // A space's policy and a request it left for the user keep the space's id for their owner.
+    expect(classifyStreamPayload({
+      type: "openchamber:permission-auto-accept.updated",
+      properties: { sessions: { ses_1: true }, modes: { ses_1: "auto" }, revision: 2, spaceId: "0123456789ab" },
+    }, undefined)).toMatchObject({ kind: "events", events: [{ event: { type: "openchamber.permission-auto-accept", properties: { spaceId: "0123456789ab" } } }] })
+    expect(classifyStreamPayload({
+      type: "openchamber:permission-auto-accept.left-for-user",
+      properties: { permissionId: "per_1", sessionId: "ses_1", directory: null, spaceId: "0123456789ab" },
+    }, undefined)).toMatchObject({ kind: "events", events: [{ event: { type: "openchamber.permission-left-for-user", properties: { spaceId: "0123456789ab" } } }] })
+    expect(classifyStreamPayload({ type: "openchamber:session-archived", properties: { sessionID: "ses_1", archivedAt: 5 } }, "/frame"))
+      .toMatchObject({ kind: "events", events: [{ directory: "/frame", event: { type: "session.patched" } }] })
+    expect(classifyStreamPayload({ nothing: true }, undefined)).toEqual({ kind: "events", events: [] })
+    expect(classifyStreamPayload("text", undefined)).toEqual({ kind: "events", events: [] })
+  })
+
+  // Each delta used to be tried against nine OpenChamber schemas before the
+  // wire schema; failed zod parses build issue objects, so this cost ~37us per
+  // delta (750ms for 20k on an M-series laptop). Dispatching on `type` brings
+  // it under 1us. The bound is loose enough for slow CI and far below the old cost.
+  test("classifies a stream of text deltas without trying unrelated schemas", () => {
+    const payloads = Array.from({ length: 20_000 }, (_, index) => textDelta(`chunk ${index}`))
+    const started = performance.now()
+    let events = 0
+    for (const payload of payloads) {
+      const classified = classifyStreamPayload(payload, undefined)
+      if (classified.kind === "events") events += classified.events.length
+    }
+    const elapsed = performance.now() - started
+    expect(events).toBe(20_000)
+    expect(elapsed).toBeLessThan(300)
   })
 })

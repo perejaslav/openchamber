@@ -38,7 +38,38 @@ export async function copyTextToClipboard(text: string): Promise<ClipboardCopyRe
   };
 }
 
-export async function copyMarkdownToClipboard(markdown: string, html: string): Promise<ClipboardCopyResult> {
+type ClipboardTextPlugin = {
+  read: () => Promise<{ text: string }>;
+};
+
+type CapacitorGlobal = {
+  getPlatform?: () => string;
+  registerPlugin?: (name: string) => ClipboardTextPlugin;
+};
+
+let androidClipboardPlugin: ClipboardTextPlugin | null = null;
+
+const getAndroidClipboardPlugin = (): ClipboardTextPlugin | null => {
+  // SAFETY: `window.Capacitor` is injected by the native shell with this shape and
+  // is absent in every other runtime, which the optional members account for.
+  const capacitor = (window as typeof window & { Capacitor?: CapacitorGlobal }).Capacitor;
+  if (capacitor?.getPlatform?.() !== 'android' || !capacitor.registerPlugin) return null;
+  androidClipboardPlugin ??= capacitor.registerPlugin('ClipboardText');
+  return androidClipboardPlugin;
+};
+
+export async function readClipboardText(): Promise<string> {
+  const plugin = getAndroidClipboardPlugin();
+  if (plugin) return (await plugin.read()).text;
+  return navigator.clipboard.readText();
+}
+
+export async function copyMarkdownToClipboard(
+  markdown: string,
+  html: string,
+  options: { plainText?: string } = {},
+): Promise<ClipboardCopyResult> {
+  const text = options.plainText ?? markdown;
   if (
     typeof navigator !== 'undefined'
     && navigator.clipboard?.write
@@ -46,18 +77,18 @@ export async function copyMarkdownToClipboard(markdown: string, html: string): P
   ) {
     try {
       const payload: Record<string, Blob> = {
-        'text/plain': new Blob([markdown], { type: 'text/plain' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
         'text/html': new Blob([html], { type: 'text/html' }),
       };
-      if (typeof ClipboardItem.supports === 'function' && ClipboardItem.supports('text/markdown')) {
+      if (options.plainText === undefined && typeof ClipboardItem.supports === 'function' && ClipboardItem.supports('text/markdown')) {
         payload['text/markdown'] = new Blob([markdown], { type: 'text/markdown' });
       }
       await navigator.clipboard.write([new ClipboardItem(payload)]);
       return { ok: true, method: 'clipboard' };
     } catch {
-      // Fall back to plain Markdown when rich clipboard writes are unavailable.
+      // Fall back to text only when rich clipboard writes are unavailable.
     }
   }
 
-  return copyTextToClipboard(markdown);
+  return copyTextToClipboard(text);
 }

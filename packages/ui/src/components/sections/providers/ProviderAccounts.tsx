@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ConnectionInfo } from '@opencode/client';
+import type { IntegrationConnection as ConnectionInfo } from '@/lib/opencode/model';
 import { SETTINGS_ICON_BUTTON_CLASS } from '@/components/sections/shared/SettingsSection';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,24 +9,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { Icon } from '@/components/icon/Icon';
 import type { IconName } from '@/components/icon/icons';
 import { useI18n } from '@/lib/i18n';
+import { openExternalUrl } from '@/lib/url';
 import { cn } from '@/lib/utils';
-import type { CredentialConnection } from './providerAuth';
+import { connectionNeedsAuth, type CredentialConnection } from './providerAuth';
 
 interface ProviderAccountsProps {
-  /** Stored credentials first, then environment variables the server can see. */
   connections: readonly ConnectionInfo[];
-  /** The one credential requests go through, when a stored credential is in use. */
   activeId: string | null;
-  /**
-   * Credentials stored under an integration the provider does not use right now
-   * (OpenCode Go keys while the Console sign-in serves Go). Removable, never switchable.
-   */
   unusedIds: ReadonlySet<string>;
-  /** Credential id with a write in flight; every account action waits for it. */
   busyId: string | null;
+  canSwitch: boolean;
+  showActive: boolean;
   onActivate: (account: CredentialConnection) => void;
   onRename: (account: CredentialConnection, label: string) => void;
   onRemove: (account: CredentialConnection) => void;
@@ -37,6 +34,30 @@ const AccountTile: React.FC<{ icon: IconName }> = ({ icon }) => (
     <Icon name={icon} className="size-4" />
   </span>
 );
+
+const AccountSubtitle: React.FC<{ connection: ConnectionInfo; fallback: string }> = ({ connection, fallback }) => (
+  connectionNeedsAuth(connection) && connection.status ? (
+    <div className="typography-micro text-[var(--status-warning)] break-words">{connection.status.message}</div>
+  ) : (
+    <div className="typography-micro text-muted-foreground">{fallback}</div>
+  )
+);
+
+const SignInAgainButton: React.FC<{ connection: ConnectionInfo; account: string }> = ({ connection, account }) => {
+  const { t } = useI18n();
+  const url = connectionNeedsAuth(connection) ? connection.status?.url : undefined;
+  if (!url) return null;
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      onClick={() => { void openExternalUrl(url); }}
+      aria-label={t('settings.providers.accounts.signInAria', { account })}
+    >
+      {t('settings.providers.accounts.signIn')}
+    </Button>
+  );
+};
 
 const RenameField: React.FC<{
   initial: string;
@@ -84,25 +105,19 @@ const RenameField: React.FC<{
   );
 };
 
-/** Stored accounts and environment connections for one provider. */
 export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
   connections,
   activeId,
   unusedIds,
   busyId,
+  canSwitch,
+  showActive,
   onActivate,
   onRename,
   onRemove,
 }) => {
   const { t } = useI18n();
   const [renamingId, setRenamingId] = React.useState<string | null>(null);
-  const switchableCount = connections.filter(
-    (connection) => connection.type === 'credential' && !unusedIds.has(connection.id),
-  ).length;
-  // With a single usable account there is nothing to switch between, so it
-  // carries no Use button; the Active mark still shows when idle ones sit next to it.
-  const canSwitch = switchableCount > 1;
-  const showActive = connections.filter((connection) => connection.type === 'credential').length > 1;
 
   return (
     <div className="divide-y divide-[var(--surface-subtle)]">
@@ -113,8 +128,9 @@ export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
               <AccountTile icon="terminal-box" />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-mono typography-ui-label text-foreground">{connection.name}</div>
-                <div className="typography-micro text-muted-foreground">{t('settings.providers.accounts.environment')}</div>
+                <AccountSubtitle connection={connection} fallback={t('settings.providers.accounts.environment')} />
               </div>
+              <SignInAgainButton connection={connection} account={connection.name} />
             </div>
           );
         }
@@ -124,11 +140,15 @@ export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
         const busy = busyId !== null;
         const methodLabel = connection.method === 'oauth'
           ? (unused ? t('settings.providers.accounts.method.oauthUnused') : t('settings.providers.accounts.method.oauth'))
-          : (unused ? t('settings.providers.accounts.method.keyUnused') : t('settings.providers.accounts.method.key'));
+          : connection.method === 'external'
+            ? (unused ? t('settings.providers.accounts.method.externalUnused') : t('settings.providers.accounts.method.external'))
+            : (unused ? t('settings.providers.accounts.method.keyUnused') : t('settings.providers.accounts.method.key'));
+        const methodIcon = connection.method === 'oauth' ? 'user-3' : connection.method === 'external' ? 'terminal-box' : 'key';
 
         return (
-          <div key={connection.id} className={cn('flex min-w-0 items-center gap-3 py-2.5', unused && 'opacity-60')}>
-            <AccountTile icon={connection.method === 'oauth' ? 'user-3' : 'key'} />
+          <ContextMenu key={connection.id} disabled={busy || renamingId === connection.id}>
+          <ContextMenuTrigger render={<div className={cn('flex min-w-0 items-center gap-3 py-2.5', unused && 'opacity-60')} />}>
+            <AccountTile icon={methodIcon} />
             {renamingId === connection.id ? (
               <RenameField
                 initial={connection.label}
@@ -142,17 +162,16 @@ export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
               <>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate typography-ui-label font-medium text-foreground">{connection.label}</span>
+                    <span dir="auto" className="truncate typography-ui-label font-medium text-foreground">{connection.label}</span>
                     {showActive && active ? (
-                      <span className="shrink-0 rounded-full bg-[var(--interactive-selection)] px-2 py-px text-[10px] font-medium text-[var(--interactive-selection-foreground)]">
+                      <span className="shrink-0 rounded-full bg-[var(--interactive-selection)] px-2 py-px text-[0.625rem] font-medium text-[var(--interactive-selection-foreground)]">
                         {t('settings.providers.accounts.active')}
                       </span>
                     ) : null}
                   </div>
-                  <div className="typography-micro text-muted-foreground">
-                    {methodLabel}
-                  </div>
+                  <AccountSubtitle connection={connection} fallback={methodLabel} />
                 </div>
+                <SignInAgainButton connection={connection} account={connection.label} />
                 {canSwitch && !active && !unused ? (
                   <Button
                     variant="outline"
@@ -174,7 +193,7 @@ export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
                       className={cn(SETTINGS_ICON_BUTTON_CLASS, 'shrink-0')}
                       aria-label={t('settings.providers.accounts.menuAria', { account: connection.label })}
                     >
-                      <Icon name="more-2" className="size-4" />
+                      <Icon name="more" className="size-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -193,7 +212,18 @@ export const ProviderAccounts: React.FC<ProviderAccountsProps> = ({
                 </DropdownMenu>
               </>
             )}
-          </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onClick={() => setRenamingId(connection.id)}>
+              <Icon name="pencil" className="size-4" />
+              {t('settings.providers.accounts.rename')}
+            </ContextMenuItem>
+            <ContextMenuItem className="text-destructive focus:text-destructive" onClick={() => onRemove(connection)}>
+              <Icon name="delete-bin" className="size-4" />
+              {t('settings.providers.accounts.remove')}
+            </ContextMenuItem>
+          </ContextMenuContent>
+          </ContextMenu>
         );
       })}
     </div>

@@ -1,24 +1,8 @@
-/**
- * useServerTTS Hook
- * 
- * React hook for server-side text-to-speech playback.
- * Fetches audio from the server and plays it, bypassing mobile Safari restrictions.
- * 
- * @example
- * ```typescript
- * const { speak, isPlaying, stop, isAvailable } = useServerTTS();
- * 
- * // Speak text
- * await speak('Hello, this is a test');
- * 
- * // Stop playback
- * stop();
- * ```
- */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import type { ReadingPlayback } from '@/lib/voice/readingAudioFocus';
 
 interface ServerTTSStatusCache {
   available: boolean;
@@ -36,7 +20,10 @@ let serverTTSStatusRequest: Promise<boolean> | null = null;
 
 async function getServerTTSStatus(): Promise<boolean> {
   const now = Date.now();
-  if (serverTTSStatusCache && now - serverTTSStatusCache.checkedAt < SERVER_TTS_STATUS_TTL_MS) {
+  if (
+    serverTTSStatusCache &&
+    now - serverTTSStatusCache.checkedAt < SERVER_TTS_STATUS_TTL_MS
+  ) {
     return serverTTSStatusCache.available;
   }
 
@@ -68,89 +55,309 @@ async function getServerTTSStatus(): Promise<boolean> {
 }
 
 export interface UseServerTTSReturn {
-  /** Whether TTS is currently playing */
   isPlaying: boolean;
-  /** Whether the server TTS service is available */
   isAvailable: boolean;
-  /** Current error if any */
   error: string | null;
-  /** Speak the given text */
   speak: (text: string, options?: SpeakOptions) => Promise<void>;
-  /** Stop current playback */
   stop: () => void;
-  /** Check if service is available */
   checkAvailability: () => Promise<boolean>;
-  /** Unlock audio for mobile Safari - call this on user gesture before speaking */
   unlockAudio: () => Promise<void>;
 }
 
 interface SpeakOptions {
-  /** Voice to use (defaults to coral) */
+  beforePlayback?: (playback: ReadingPlayback) => Promise<void>;
   voice?: string;
-  /** Model to use (defaults to gpt-4o-mini-tts) */
   model?: string;
-  /** Speech speed (0.25 to 4.0, defaults to 1.0) */
   speed?: number;
-  /** Speech pitch shift (0.5 to 2.0, mapped to cents; 1.0 = no shift) */
   pitch?: number;
-  /** Playback volume (0 to 1, defaults to 1.0) */
   volume?: number;
-  /** Optional instructions for the voice */
   instructions?: string;
-  /** Summarize long text before speaking (defaults to true) */
   summarize?: boolean;
-  /** Provider ID for summarization model */
   providerId?: string;
-  /** Model ID for summarization */
   modelId?: string;
-  /** Character threshold for summarization (defaults to 200) */
   threshold?: number;
-  /** Custom base URL for OpenAI-compatible server */
   baseURL?: string;
-  /** Callback when playback starts */
+  endpointPath?: string;
   onStart?: () => void;
-  /** Callback when playback ends */
   onEnd?: () => void;
-  /** Callback on error */
   onError?: (error: string) => void;
 }
 
-// Shared AudioContext for Web Audio API playback (better iOS support)
 let sharedAudioContext: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
   if (!sharedAudioContext) {
-    sharedAudioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    sharedAudioContext = new (
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext
+    )();
   }
   return sharedAudioContext;
 }
 
-export function useServerTTS(options: UseServerTTSOptions = {}): UseServerTTSReturn {
+const TTS_MIN_CHUNK_LENGTH = 40;
+const TTS_FAST_PATH_MAX_LENGTH = 200;
+
+function segmentSentences(text: string): string[] {
+  const Segmenter = globalThis.Intl?.Segmenter;
+  if (Segmenter) {
+    return Array.from(
+      new Segmenter(undefined, { granularity: 'sentence' }).segment(text),
+      (segment) => segment.segment,
+    );
+  }
+  try {
+    return text.split(new RegExp('(?<=[.!?…])\\s+'));
+  } catch {
+    return [text];
+  }
+}
+
+export function splitSentencesForTTS(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.length <= TTS_FAST_PATH_MAX_LENGTH) {
+    return [trimmed];
+  }
+
+  const chunks: string[] = [];
+  for (const paragraph of trimmed.split(/\n+/)) {
+    const line = paragraph.trim();
+    if (!line) {
+      continue;
+    }
+    const lineChunks: string[] = [];
+    let pending = '';
+    for (const segment of segmentSentences(line)) {
+      pending += segment;
+      if (pending.trim().length >= TTS_MIN_CHUNK_LENGTH) {
+        lineChunks.push(pending.trim());
+        pending = '';
+      }
+    }
+    const tail = pending.trim();
+    if (tail) {
+      if (tail.length < TTS_MIN_CHUNK_LENGTH && lineChunks.length > 0) {
+        lineChunks[lineChunks.length - 1] = `${lineChunks[lineChunks.length - 1]} ${tail}`;
+      } else {
+        lineChunks.push(tail);
+      }
+    }
+    chunks.push(...lineChunks);
+  }
+  return chunks;
+}
+
+interface TTSRequestConfig {
+  currentProviderId: string;
+  currentModelId: string;
+}
+
+export function buildTTSRequestBody(
+  text: string,
+  options: SpeakOptions | undefined,
+  config: TTSRequestConfig,
+) {
+  return {
+    text,
+    voice: options?.voice || 'nova',
+    model: options?.model || undefined,
+    speed: options?.speed || 0.9,
+    instructions: options?.instructions,
+    summarize: false,
+    providerId: options?.providerId || config.currentProviderId || undefined,
+    modelId: options?.modelId || config.currentModelId || undefined,
+    baseURL: options?.baseURL || undefined,
+    endpointPath: options?.endpointPath || undefined,
+  };
+}
+
+async function fetchTTSAudioChunk(
+  ctx: AudioContext,
+  text: string,
+  options: SpeakOptions | undefined,
+  config: TTSRequestConfig,
+  signal: AbortSignal,
+): Promise<AudioBuffer> {
+  const response = await runtimeFetch('/api/tts/speak', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildTTSRequestBody(text, options, config)),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorData = await response
+      .json()
+      .catch(() => ({ error: 'Unknown error' }));
+    throw new Error(errorData.error || `HTTP ${response.status}`);
+  }
+
+  const audioBlob = await response.blob();
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  return ctx.decodeAudioData(arrayBuffer);
+}
+
+function scheduleAudioChunk(
+  ctx: AudioContext,
+  audioBuffer: AudioBuffer,
+  options: SpeakOptions | undefined,
+  startAt: number,
+) {
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+
+  const pitch = options?.pitch ?? 1.0;
+  const detuneCents = pitch !== 1.0 ? (pitch - 1.0) * 1200 : 0;
+  if (detuneCents !== 0) {
+    source.detune.value = detuneCents;
+  }
+
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = options?.volume ?? 1.0;
+
+  source.connect(gainNode);
+  gainNode.connect(ctx.destination);
+  source.start(startAt);
+
+  return {
+    source,
+    endsAt: startAt + audioBuffer.duration / 2 ** (detuneCents / 1200),
+  };
+}
+
+export type ChunkedPlaybackResult =
+  | { status: 'completed'; scheduled: number }
+  | { status: 'aborted'; scheduled: number }
+  | { status: 'all-failed' };
+
+export async function runChunkedTTSPlayback<TBuffer, TSource>(
+  chunks: readonly string[],
+  deps: {
+    signal: AbortSignal;
+    fetchChunk: (chunk: string) => Promise<TBuffer>;
+    scheduleChunk: (
+      audioBuffer: TBuffer,
+      startAt: number,
+    ) => { source: TSource; endsAt: number };
+    currentTime: () => number;
+    attachOnEnded: (source: TSource, handler: () => void) => void;
+    onScheduled: (source: TSource) => void;
+    onFirstScheduled: () => void;
+    onAllEnded: () => void;
+    beforePlayback?: () => Promise<void>;
+  },
+): Promise<ChunkedPlaybackResult> {
+  let scheduled = 0;
+  let ended = 0;
+  let fetchLoopDone = false;
+  let finished = false;
+  let nextStartTime = 0;
+
+  const maybeFinish = () => {
+    if (
+      fetchLoopDone &&
+      !finished &&
+      scheduled > 0 &&
+      ended >= scheduled &&
+      !deps.signal.aborted
+    ) {
+      finished = true;
+      deps.onAllEnded();
+    }
+  };
+
+  for (const chunk of chunks) {
+    if (deps.signal.aborted) {
+      break;
+    }
+
+    let audioBuffer: TBuffer;
+    try {
+      audioBuffer = await deps.fetchChunk(chunk);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        break;
+      }
+      console.warn(
+        '[useServerTTS] Skipping failed sentence chunk:',
+        chunk,
+        err,
+      );
+      continue;
+    }
+    if (deps.signal.aborted) {
+      break;
+    }
+
+    await deps.beforePlayback?.();
+    if (deps.signal.aborted) break;
+    const { source, endsAt } = deps.scheduleChunk(
+      audioBuffer,
+      Math.max(deps.currentTime(), nextStartTime),
+    );
+    nextStartTime = endsAt;
+    deps.onScheduled(source);
+    scheduled += 1;
+
+    if (scheduled === 1) {
+      deps.onFirstScheduled();
+    }
+
+    deps.attachOnEnded(source, () => {
+      ended += 1;
+      maybeFinish();
+    });
+  }
+
+  fetchLoopDone = true;
+  maybeFinish();
+
+  if (deps.signal.aborted) {
+    return { status: 'aborted', scheduled };
+  }
+  if (scheduled === 0) {
+    return { status: 'all-failed' };
+  }
+  return { status: 'completed', scheduled };
+}
+
+export function useServerTTS(
+  options: UseServerTTSOptions = {},
+): UseServerTTSReturn {
   const enabled = options.enabled ?? true;
   const availabilityMode = options.availabilityMode ?? 'auto';
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAvailable, setIsAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  const audioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
-  
-  // Get current model and API settings from config store.
+
   const currentProviderId = useConfigStore((state) => state.currentProviderId);
   const currentModelId = useConfigStore((state) => state.currentModelId);
-  const openaiApiKey = useConfigStore((state) => state.openaiApiKey);
-  const openaiCompatibleUrl = useConfigStore((state) => state.openaiCompatibleUrl);
-  const openaiCompatibleApiKey = useConfigStore((state) => state.openaiCompatibleApiKey);
+  const hasStoredOpenaiKey = useConfigStore((state) => state.voiceApiKeys.openai);
+  const refreshVoiceApiKeys = useConfigStore((state) => state.refreshVoiceApiKeys);
+  const openaiCompatibleUrl = useConfigStore(
+    (state) => state.openaiCompatibleUrl,
+  );
+  const ttsChunkedMode = useConfigStore((state) => state.ttsChunkedMode);
 
-  // Check if server TTS is available
   const checkAvailability = useCallback(async (): Promise<boolean> => {
     if (!enabled) {
       setIsAvailable(false);
       return false;
     }
 
-    const hasClientKey = Boolean(openaiApiKey && openaiApiKey.trim().length > 0);
-    const hasCustomUrl = Boolean(openaiCompatibleUrl && openaiCompatibleUrl.trim().length > 0);
+    const hasClientKey = hasStoredOpenaiKey;
+    const hasCustomUrl = Boolean(
+      openaiCompatibleUrl && openaiCompatibleUrl.trim().length > 0,
+    );
     if (availabilityMode === 'openai-compatible') {
       setIsAvailable(hasCustomUrl);
       return hasCustomUrl;
@@ -174,62 +381,57 @@ export function useServerTTS(options: UseServerTTSOptions = {}): UseServerTTSRet
       setIsAvailable(false);
       return false;
     }
-  }, [availabilityMode, enabled, openaiApiKey, openaiCompatibleUrl]);
+  }, [availabilityMode, enabled, hasStoredOpenaiKey, openaiCompatibleUrl]);
 
-  // Check availability on mount and when API key changes
+  useEffect(() => {
+    if (enabled) void refreshVoiceApiKeys();
+  }, [enabled, refreshVoiceApiKeys]);
+
   useEffect(() => {
     void checkAvailability();
   }, [checkAvailability]);
 
-  // Stop current playback
   const stop = useCallback(() => {
-    // Stop Web Audio API source
-    if (audioSourceRef.current) {
+    for (const source of audioSourcesRef.current) {
       try {
-        audioSourceRef.current.stop();
+        source.stop();
       } catch {
         // Already stopped
       }
-      audioSourceRef.current = null;
     }
-    
+    audioSourcesRef.current = [];
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    
+
     setIsPlaying(false);
   }, []);
 
-  // Pre-unlock audio for mobile Safari
-  // This must be called within a user gesture context
   const unlockAudio = useCallback(async (): Promise<void> => {
     try {
-      // Get or create AudioContext
       const ctx = getAudioContext();
-      
-      // Resume if suspended (required for iOS Safari)
+
       if (ctx.state === 'suspended') {
         await ctx.resume();
         console.log('[useServerTTS] AudioContext resumed');
       }
-      
-      // Play a tiny silent buffer to fully unlock
+
       const buffer = ctx.createBuffer(1, 1, 22050);
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
       source.start(0);
-      
+
       console.log('[useServerTTS] Audio unlocked for mobile playback');
     } catch (err) {
       console.error('[useServerTTS] Failed to unlock audio:', err);
     }
   }, []);
 
-  // Speak text using server TTS
-  const speak = useCallback(async (text: string, options?: SpeakOptions): Promise<void> => {
-    // Stop any existing playback
+  const speak = useCallback(
+    async (text: string, options?: SpeakOptions): Promise<void> => {
     stop();
 
     if (!text.trim()) {
@@ -241,112 +443,138 @@ export function useServerTTS(options: UseServerTTSOptions = {}): UseServerTTSRet
     setError(null);
 
     try {
-      // Unlock audio context first (required for mobile Safari)
-      // Must be done before any async operations to stay within user gesture context
       const ctx = getAudioContext();
       if (ctx.state === 'suspended') {
         await ctx.resume();
         console.log('[useServerTTS] AudioContext resumed');
       }
-      
-      // Play a silent buffer to fully unlock audio on iOS
+
       const silentBuffer = ctx.createBuffer(1, 1, 22050);
       const silentSource = ctx.createBufferSource();
       silentSource.buffer = silentBuffer;
       silentSource.connect(ctx.destination);
       silentSource.start(0);
 
-      // Create abort controller for this request
-      abortControllerRef.current = new AbortController();
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
 
-      const voice = options?.voice || 'nova';
-      console.log('[useServerTTS] Speaking with voice:', voice, 'options:', options);
+        const config = {
+          currentProviderId,
+          currentModelId,
+        };
+        console.log(
+          '[useServerTTS] Speaking with voice:',
+          options?.voice || 'nova',
+          'options:',
+          options,
+        );
 
-      // Fetch audio from server
-      const response = await runtimeFetch('/api/tts/speak', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          voice,
-          model: options?.model || undefined,
-          speed: options?.speed || 0.9,
-          instructions: options?.instructions,
-          summarize: false,
-          // Use provided provider/model, or fall back to current chat model
-          providerId: options?.providerId || currentProviderId || undefined,
-          modelId: options?.modelId || currentModelId || undefined,
-          // Send API key from settings if available
-          apiKey: options?.baseURL ? (openaiCompatibleApiKey || undefined) : (openaiApiKey || undefined),
-          // Send custom base URL for OpenAI-compatible servers
-          baseURL: options?.baseURL || undefined,
-        }),
-        signal: abortControllerRef.current.signal,
-      });
+      const chunks = ttsChunkedMode ? splitSentencesForTTS(text) : [text.trim()];
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
+        if (chunks.length <= 1) {
+          const audioBuffer = await fetchTTSAudioChunk(
+            ctx,
+            chunks[0] ?? text.trim(),
+            options,
+            config,
+            controller.signal,
+          );
+          await options?.beforePlayback?.({ pause: () => ctx.suspend(), resume: () => ctx.resume() });
+          if (controller.signal.aborted) return;
+          const { source } = scheduleAudioChunk(ctx, audioBuffer, options, 0);
 
-      // Get audio data from response
-      const audioBlob = await response.blob();
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      
-      // Decode audio data using the same context we unlocked earlier
-      console.log('[useServerTTS] Decoding audio data...');
-      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-      
-      // Create source node
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
+          audioSourcesRef.current = [source];
 
-      // Apply pitch shift via detune (cents): 1200 cents = 1 octave
-      const pitch = options?.pitch ?? 1.0;
-      if (pitch !== 1.0) {
-        source.detune.value = (pitch - 1.0) * 1200;
-      }
-
-      // Apply volume via GainNode
-      const volume = options?.volume ?? 1.0;
-      const gainNode = ctx.createGain();
-      gainNode.gain.value = volume;
-
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      audioSourceRef.current = source;
-      
-      // Set up event handlers
       source.onended = () => {
         console.log('[useServerTTS] Audio playback ended');
         setIsPlaying(false);
-        audioSourceRef.current = null;
+            audioSourcesRef.current = [];
         options?.onEnd?.();
       };
-      
-      // Start playback
-      console.log('[useServerTTS] Starting audio playback via Web Audio API...');
+
+          console.log(
+            '[useServerTTS] Starting audio playback via Web Audio API...',
+          );
       setIsPlaying(true);
       options?.onStart?.();
-      source.start(0);
-      
+          return;
+        }
+
+        const sources: AudioBufferSourceNode[] = [];
+        audioSourcesRef.current = sources;
+
+        let onEndSent = false;
+        const sendOnEnd = () => {
+          if (!onEndSent) {
+            onEndSent = true;
+            options?.onEnd?.();
+          }
+        };
+
+        const result = await runChunkedTTSPlayback(chunks, {
+          beforePlayback: async () => options?.beforePlayback?.({ pause: () => ctx.suspend(), resume: () => ctx.resume() }),
+          signal: controller.signal,
+          fetchChunk: (chunk) =>
+            fetchTTSAudioChunk(ctx, chunk, options, config, controller.signal),
+          scheduleChunk: (audioBuffer, startAt) =>
+            scheduleAudioChunk(ctx, audioBuffer, options, startAt),
+          currentTime: () => ctx.currentTime,
+          attachOnEnded: (source, handler) => {
+            source.onended = handler;
+          },
+          onScheduled: (source) => {
+            sources.push(source);
+          },
+          onFirstScheduled: () => {
+            console.log(
+              '[useServerTTS] Starting chunked audio playback via Web Audio API...',
+            );
+            setIsPlaying(true);
+            options?.onStart?.();
+          },
+          onAllEnded: () => {
+            console.log('[useServerTTS] Chunked playback finished');
+            setIsPlaying(false);
+            audioSourcesRef.current = [];
+            sendOnEnd();
+          },
+        });
+
+        if (result.status === 'aborted') {
+          if (result.scheduled > 0) {
+            sendOnEnd();
+          }
+          return;
+        }
+
+        if (result.status === 'all-failed') {
+          const errorMsg = 'Failed to speak: all sentence chunks failed';
+          console.error('[useServerTTS] Error:', errorMsg);
+          setError(errorMsg);
+          options?.onError?.(errorMsg);
+          setIsPlaying(false);
+          return;
+        }
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
-        // Request was aborted, don't show error
         return;
       }
-      
+
       const errorMsg = err instanceof Error ? err.message : 'Failed to speak';
       console.error('[useServerTTS] Error:', errorMsg);
       setError(errorMsg);
       options?.onError?.(errorMsg);
       setIsPlaying(false);
     }
-  }, [stop, currentProviderId, currentModelId, openaiApiKey, openaiCompatibleApiKey]);
+    },
+    [
+      stop,
+      currentProviderId,
+      currentModelId,
+      ttsChunkedMode,
+    ],
+  );
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stop();

@@ -1,12 +1,16 @@
 import { lanesBelow, type GraphRow } from './graph.ts';
 
-/** Row height of a collapsed commit, in CSS px. The dot sits in its middle. */
 export const ROW = 36;
 const LANE = 10;
 const MAX_LANES = 8;
 const SVG = 'http://www.w3.org/2000/svg';
-// Lanes cycle through host colour tokens; no literal colours anywhere.
-const LANE_COLORS = ['var(--oc-primary)', 'var(--oc-info)', 'var(--oc-success)', 'var(--oc-warning)', 'var(--oc-error)'];
+const LANE_COLORS = [
+  'var(--oc-syntax-keyword, var(--oc-primary))',
+  'var(--oc-syntax-string, var(--oc-info))',
+  'var(--oc-syntax-number, var(--oc-success))',
+  'var(--oc-syntax-function, var(--oc-warning))',
+  'var(--oc-syntax-type, var(--oc-error))',
+];
 
 export type RefKind = 'local' | 'remote' | 'tag';
 
@@ -18,6 +22,7 @@ export const STYLE = `
   .bar { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; }
   .bar .grow { flex: 1; }
   .picker { display: flex; flex-direction: column; gap: 2px; max-height: 104px; overflow-y: auto; padding: 0 2px 6px; }
+  .bar[hidden], .picker[hidden] { display: none; }
   .picker-group { color: var(--oc-muted); font-size: 11px; padding-top: 2px; }
   .note { color: var(--oc-muted); padding: 6px 2px; }
   .commit { display: flex; flex-direction: column; }
@@ -54,6 +59,23 @@ export const STYLE = `
   .card code { font-family: var(--oc-mono); color: var(--oc-elevated-fg); }
   .card .actions { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 2px; }
   .card .error { color: var(--oc-error-text); }
+   .popover-card { display: flex; flex-direction: column; gap: 6px; box-sizing: border-box; min-height: 0; padding: 10px;
+     color: var(--oc-elevated-fg); }
+   .popover-author { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+   .popover-initials { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px;
+     border-radius: 4px; background: var(--oc-selection); color: var(--oc-selection-fg); font-size: 10px; font-weight: 600; }
+   .popover-author-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+   .popover-meta, .popover-body, .popover-stats, .popover-feedback { color: var(--oc-muted); font-size: 11px; }
+   .popover-subject { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+   .popover-body { max-height: 72px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+   .popover-refs, .popover-stats, .popover-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+   .popover-refs .ref { max-width: 100%; }
+   .popover-stats .add { color: var(--oc-success-text); }
+   .popover-stats .del { color: var(--oc-error-text); }
+   .popover-actions { padding-top: 2px; }
+   .popover-actions code { margin-right: auto; font-family: var(--oc-mono); }
+   .popover-feedback { min-height: 14px; color: var(--oc-error-text); }
+   .popover-feedback:empty { display: none; }
 `;
 
 const laneX = (lane: number): number => LANE / 2 + lane * LANE;
@@ -67,7 +89,6 @@ const svgNode = <K extends keyof SVGElementTagNameMap>(name: K, attributes: Reco
 
 export const graphWidth = (lanes: number): number => Math.min(Math.max(lanes, 1), MAX_LANES) * LANE;
 
-/** One collapsed row of the graph: straight lanes first, curves over them, the dot on top. */
 export const drawRowGraph = (row: GraphRow, width: number, dot: 'commit' | 'head' | 'dirty'): SVGSVGElement => {
   const svg = svgNode('svg', { width, height: ROW, class: 'graph', 'aria-hidden': 'true' });
   const visible = (lane: number) => laneX(lane) < width;
@@ -89,7 +110,6 @@ export const drawRowGraph = (row: GraphRow, width: number, dot: 'commit' | 'head
       d, fill: 'none', stroke: laneColor(lane), 'stroke-width': 1.5, 'stroke-linecap': 'round',
       'stroke-opacity': connector.type === 'passing' ? 0.72 : 1,
     });
-    // The working tree is not a commit yet: its lane is dashed.
     if (dot === 'dirty' && connector.fromLane === row.lane) path.setAttribute('stroke-dasharray', '2 3');
     svg.append(path);
   }
@@ -105,7 +125,6 @@ export const drawRowGraph = (row: GraphRow, width: number, dot: 'commit' | 'head
   return svg;
 };
 
-/** Lanes continuing past an expanded row, drawn beside its details at any height. */
 export const drawRail = (row: GraphRow, width: number): HTMLElement => {
   const rail = document.createElement('div');
   rail.className = 'rail';

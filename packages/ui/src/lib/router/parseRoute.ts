@@ -5,25 +5,20 @@ import {
   VALID_SETTINGS_SECTIONS,
   ROUTE_PARAMS,
 } from './types';
+import { isLinkIdentifier } from './messageFocus';
 
-/**
- * Parse the current URL search parameters into a RouteState.
- * Returns null values for any parameter that is missing or invalid.
- */
 export function parseRoute(searchParams?: URLSearchParams): RouteState {
   const params = searchParams ?? getSearchParams();
 
   return {
     sessionId: parseSessionId(params),
+    messageId: parseMessageId(params),
     tab: parseTab(params),
     settingsPath: parseSettingsPath(params),
     diffFile: parseDiffFile(params),
   };
 }
 
-/**
- * Safely get URLSearchParams from the current location.
- */
 function getSearchParams(): URLSearchParams {
   if (typeof window === 'undefined') {
     return new URLSearchParams();
@@ -36,10 +31,6 @@ function getSearchParams(): URLSearchParams {
   }
 }
 
-/**
- * Parse session ID from URL parameters.
- * Returns null if missing or empty.
- */
 function parseSessionId(params: URLSearchParams): string | null {
   const value = params.get(ROUTE_PARAMS.SESSION);
   if (!value || value.trim().length === 0) {
@@ -48,10 +39,14 @@ function parseSessionId(params: URLSearchParams): string | null {
   return value.trim();
 }
 
-/**
- * Parse main tab from URL parameters.
- * Returns null if missing or invalid.
- */
+function parseMessageId(params: URLSearchParams): string | null {
+  const value = params.get(ROUTE_PARAMS.MESSAGE)?.trim() ?? '';
+  if (!parseSessionId(params) || !isLinkIdentifier(value)) {
+    return null;
+  }
+  return value;
+}
+
 function parseTab(params: URLSearchParams): RouteTab | null {
   const value = params.get(ROUTE_PARAMS.TAB);
   if (!value) {
@@ -66,10 +61,6 @@ function parseTab(params: URLSearchParams): RouteTab | null {
   return null;
 }
 
-/**
- * Parse settings target from URL parameters.
- * Returns null if missing/empty.
- */
 function parseSettingsPath(params: URLSearchParams): string | null {
   const value = params.get(ROUTE_PARAMS.SETTINGS);
   if (!value) {
@@ -82,12 +73,10 @@ function parseSettingsPath(params: URLSearchParams): string | null {
     return null;
   }
 
-  // Handle common aliases
   if (normalized === 'openchamber' || normalized === 'general' || normalized === 'preferences') {
     return 'home';
   }
 
-  // Keep legacy section ids as-is (mapping happens at apply time).
   if ((VALID_SETTINGS_SECTIONS as readonly string[]).includes(normalized)) {
     return normalized;
   }
@@ -95,28 +84,19 @@ function parseSettingsPath(params: URLSearchParams): string | null {
   return normalized;
 }
 
-/**
- * Parse diff file path from URL parameters.
- * Returns null if missing or empty.
- */
 function parseDiffFile(params: URLSearchParams): string | null {
   const value = params.get(ROUTE_PARAMS.FILE);
   if (!value || value.trim().length === 0) {
     return null;
   }
 
-  // URL decode the file path
   try {
     return decodeURIComponent(value.trim());
   } catch {
-    // If decoding fails, return the raw value
     return value.trim();
   }
 }
 
-/**
- * Check if the current URL has any route parameters.
- */
 export function hasRouteParams(): boolean {
   if (typeof window === 'undefined') {
     return false;

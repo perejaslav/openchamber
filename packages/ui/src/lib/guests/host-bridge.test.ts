@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { OPENCHAMBER_SDK_CHANNEL, type GuestMessage, type ResolveResultPayload, type StartSessionRequest, type ToastRequest } from '@openchamber/sdk';
+import { HostRequestError, OPENCHAMBER_SDK_CHANNEL, type GuestMessage, type GuestStatusControl, type ResolveResultPayload, type StartSessionRequest, type ToastRequest } from '@openchamber/sdk';
 import type { GuestFileProxyResult, GuestFileRequest } from './files.ts';
 import type { GuestGenerateProxyResult } from './generate.ts';
 
@@ -24,11 +24,18 @@ const effects = (overrides: Partial<BridgeEffects> = {}): BridgeEffects => ({
   workspaceRead: overrides.workspaceRead ?? (() => ({ kind: 'projects', state: 'ready', projects: [] })),
   workspaceSubscribe: overrides.workspaceSubscribe ?? (() => {}),
   workspaceUnsubscribe: overrides.workspaceUnsubscribe ?? (() => {}),
+  shellsSubscribe: overrides.shellsSubscribe ?? (() => {}),
+  shellsUnsubscribe: overrides.shellsUnsubscribe ?? (() => {}),
+  shellOutput: overrides.shellOutput ?? (async () => ({ output: '', cursor: 0, skipped: false })),
+  shellStop: overrides.shellStop ?? (async () => ({ stopped: true })),
+  microphoneOpen: overrides.microphoneOpen ?? (async () => {}),
+  microphoneClose: overrides.microphoneClose ?? (() => {}),
   storage: overrides.storage ?? (async () => ({ storage: true, op: 'keys', keys: [] })),
+  setStatusControls: overrides.setStatusControls ?? (() => {}),
   openSession: overrides.openSession ?? (() => {}),
   toast: overrides.toast ?? (() => {}),
   openUrl: overrides.openUrl ?? (async () => true),
-  openSurface: overrides.openSurface ?? (() => {}),
+  openSurface: overrides.openSurface ?? (() => ({ ok: true })),
   writeClipboard: overrides.writeClipboard ?? (async () => true),
   compose: overrides.compose ?? (() => {}),
   attach: overrides.attach ?? (() => {}),
@@ -45,11 +52,29 @@ const effects = (overrides: Partial<BridgeEffects> = {}): BridgeEffects => ({
   generate: overrides.generate ?? (async () => ({ ok: true, result: { text: '' } })),
   setBadge: overrides.setBadge ?? (() => {}),
   resize: overrides.resize ?? (() => {}),
+  answerBlock: overrides.answerBlock ?? (async () => {}),
   openCommit: overrides.openCommit ?? (async () => ({ ok: true })),
+  openWalkthrough: overrides.openWalkthrough ?? (async () => ({ ok: true })),
   resolveResult: overrides.resolveResult ?? (() => {}),
+  openPopover: overrides.openPopover ?? (() => {}),
+  closePopover: overrides.closePopover ?? (() => {}),
+  setPopoverAnchorActive: overrides.setPopoverAnchorActive ?? (() => {}),
 });
 
 describe('answerGuestMessage', () => {
+  test('publishes status controls through the frame owner and reports unsupported owners', async () => {
+    const controls: GuestStatusControl[] = [{ kind: 'button', id: 'refresh', label: 'Refresh' }];
+    const seen: GuestStatusControl[][] = [];
+    const message: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'status-controls', id: 'header-1', payload: { controls } };
+    const result = await answerGuestMessage(message, effects({ setStatusControls: (next) => { seen.push(next); } }));
+    expect(seen).toEqual([controls]);
+    expect(result).toMatchObject({ type: 'result', id: 'header-1', ok: true });
+    const unsupported = await answerGuestMessage(message, effects({ setStatusControls: () => {
+      throw new HostRequestError('UNSUPPORTED', 'Only mounted status frames own header controls.');
+    } }));
+    expect(unsupported).toMatchObject({ type: 'result', ok: false, code: 'UNSUPPORTED' });
+  });
+
   test('forwards toast buttons and persistence to the host without awaiting a click', async () => {
     const request: ToastRequest = { kind: 'info', message: 'Summary', copy: { text: 'Source' }, dismiss: true, persistent: true };
     const seen: ToastRequest[] = [];
@@ -99,6 +124,37 @@ describe('answerGuestMessage', () => {
     }, effects());
     expect(reply?.type).toBe('result');
     expect(reply && reply.type === 'result' && reply.ok).toBe(false);
+  });
+
+  test('a surface that did not open is a failed result with its code', async () => {
+    const reply = await answerGuestMessage({
+      channel: OPENCHAMBER_SDK_CHANNEL,
+      v: 1,
+      type: 'open-surface',
+      id: 'oc-3b',
+      payload: { surfaceId: 'git' },
+    }, effects({ openSurface: () => ({ ok: false, code: 'NO_DIRECTORY', message: 'No chat or project is open.' }) }));
+    expect(reply).toMatchObject({ type: 'result', id: 'oc-3b', ok: false, code: 'NO_DIRECTORY' });
+  });
+
+  test('a walkthrough request reaches the pane with its base and answers with its outcome', async () => {
+    const message: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'open-walkthrough', id: 'wt-1', payload: { base: 'main' } };
+    const seen: string[] = [];
+    expect(await answerGuestMessage(message, effects({ openWalkthrough: async (base) => { seen.push(base); return { ok: true }; } })))
+      .toMatchObject({ type: 'result', id: 'wt-1', ok: true });
+    expect(seen).toEqual(['main']);
+    expect(await answerGuestMessage(message, effects({ openWalkthrough: async () => ({ ok: false, code: 'NOT_FOUND', message: 'No such base.' }) })))
+      .toMatchObject({ type: 'result', id: 'wt-1', ok: false, code: 'NOT_FOUND', error: 'No such base.' });
+  });
+
+  test('a block answer reaches the block, and a refusal tells the frame why', async () => {
+    const message: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'block-answer', id: 'answer-1', payload: { text: 'Explain' } };
+    const seen: string[] = [];
+    const sent = await answerGuestMessage(message, effects({ answerBlock: async (text) => { seen.push(text); } }));
+    expect(seen).toEqual(['Explain']);
+    expect(sent).toMatchObject({ type: 'result', id: 'answer-1', ok: true });
+    const refused = await answerGuestMessage(message, effects({ answerBlock: async () => { throw new Error('answerBlock works only from a click.'); } }));
+    expect(refused).toMatchObject({ ok: false, error: 'answerBlock works only from a click.', code: 'HOST_REJECTED' });
   });
 
   test('writes clipboard text', async () => {
@@ -536,6 +592,37 @@ describe('answerGuestMessage', () => {
       code: 'NO_SERVICE',
     });
   });
+
+  test('routes shells calls and turns failures into coded results', async () => {
+    const calls: string[] = [];
+    const stopMessage: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'shell-stop', id: 'oc-9', payload: { shellId: 'sh_1' } };
+    const refused = await answerGuestMessage(stopMessage, effects({ shellStop: async () => { throw new HostRequestError('NOT_GRANTED', 'Not allowed'); } }));
+    expect(refused).toMatchObject({ ok: false, code: 'NOT_GRANTED' });
+    const allowed = await answerGuestMessage(stopMessage, effects({ shellStop: async ({ shellId }) => { calls.push(shellId); return { stopped: true }; } }));
+    expect(allowed).toMatchObject({ ok: true, payload: { stopped: true } });
+    expect(calls).toEqual(['sh_1']);
+
+    const subscribeMessage: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'shells-subscribe', id: 'oc-10', payload: { subscriptionId: 's1', scope: { kind: 'session', sessionId: 'ses_1' } } };
+    let subscribed = '';
+    await answerGuestMessage(subscribeMessage, effects({ shellsSubscribe: ({ subscriptionId }) => { subscribed = subscriptionId; } }));
+    expect(subscribed).toBe('s1');
+    let routedScope = '';
+    await answerGuestMessage({ channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'shells-subscribe', id: 'oc-10b', payload: { subscriptionId: 's2', scope: { kind: 'project', projectId: 'path_/repo' } } }, effects({ shellsSubscribe: (subscription) => { routedScope = subscription.scope.kind; } }));
+    expect(routedScope).toBe('project');
+    const refusedSubscribe = await answerGuestMessage(subscribeMessage, effects({ shellsSubscribe: () => { throw new HostRequestError('NOT_FOUND', 'Project is not registered.'); } }));
+    expect(refusedSubscribe).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    let unsubscribed = '';
+    await answerGuestMessage({ channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'shells-unsubscribe', id: 'oc-11', payload: { subscriptionId: 's1' } }, effects({ shellsUnsubscribe: (id) => { unsubscribed = id; } }));
+    expect(unsubscribed).toBe('s1');
+
+    const outputMessage: GuestMessage = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'shell-output', id: 'oc-12', payload: { shellId: 'sh_1', cursor: 4 } };
+    const output = await answerGuestMessage(outputMessage, effects({ shellOutput: async ({ shellId, cursor }) => ({ output: `${shellId}:${cursor}`, cursor: 6, skipped: false }) }));
+    expect(output).toMatchObject({ ok: true, payload: { output: 'sh_1:4', cursor: 6 } });
+    const missingOutput = await answerGuestMessage(outputMessage, effects({ shellOutput: async () => { throw new HostRequestError('NOT_FOUND', 'That shell is not running.'); } }));
+    expect(missingOutput).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    const missingStop = await answerGuestMessage(stopMessage, effects({ shellStop: async () => { throw new HostRequestError('NOT_FOUND', 'That shell is not running.'); } }));
+    expect(missingStop).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  });
 });
 
 describe('toGuestSessionSnapshot', () => {
@@ -580,6 +667,29 @@ describe('guestSessionLifecyclePhase', () => {
 });
 
 describe('badge and resolve-result', () => {
+  test('routes popover lifecycle requests through the owning pane', async () => {
+    const seen: string[] = [];
+    const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 } as const;
+    const open = await answerGuestMessage({ ...base, type: 'popover-open', id: 'popover-call', payload: {
+      id: 'preview-1', anchor: { x: 10, y: 10, width: 20, height: 20 }, width: 160, height: 48, data: null,
+    } }, effects({ openPopover: (request) => { seen.push(`open:${request.id}`); } }));
+    const active = await answerGuestMessage({ ...base, type: 'popover-anchor', id: 'popover-active', payload: { id: 'preview-1', active: false } }, effects({ setPopoverAnchorActive: (id, value) => { seen.push(`active:${id}:${value}`); } }));
+    const close = await answerGuestMessage({ ...base, type: 'popover-close', id: 'popover-close', payload: { id: 'preview-1', reason: 'escape' } }, effects({ closePopover: (id, reason) => { seen.push(`close:${id}:${reason}`); } }));
+    expect(seen).toEqual(['open:preview-1', 'active:preview-1:false', 'close:preview-1:escape']);
+    expect(open).toMatchObject({ ok: true });
+    expect(active).toMatchObject({ ok: true });
+    expect(close).toMatchObject({ ok: true });
+  });
+
+  test('refuses popovers when the mounted owner has no overlay handler', async () => {
+    const reply = await answerGuestMessage({
+      channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'popover-open', id: 'popover-call', payload: {
+        id: 'preview-1', anchor: { x: 10, y: 10, width: 20, height: 20 }, width: 160, height: 48, data: null,
+      },
+    }, { ...effects(), openPopover: undefined });
+    expect(reply).toMatchObject({ type: 'result', ok: false, code: 'UNSUPPORTED' });
+  });
+
   test('badge sets the count and answers ok', async () => {
     const seen: Array<number | null> = [];
     const reply = await answerGuestMessage({

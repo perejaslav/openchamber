@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { z } from 'zod';
 import type { AssistantMessage, Message, Part, Session, SyntheticMessage, TextPart } from '@/lib/opencode/model';
 import { collectSessionTitleTurns, formatSessionTitleContext, generatedSessionTitleSchema, generateSessionTitle } from './sessionTitle';
 import { configureRuntimeUrlResolver } from './runtime-url';
@@ -173,14 +174,12 @@ describe('bounded history loading', () => {
   test('uses the real shared loader and stops paging as soon as three pairs are available', async () => {
     let requests = 0;
     const childStores = new ChildStoreManager();
-    // Records that go through a child store come back ordered by creation
-    // time, so this fixture stamps each pair with its own slot.
     const orderedPair = (ordinal: number, id: string): RecordEntry[] => {
       const created = ordinal * 10;
       const prompt = user(id);
       return [
-        { ...prompt, info: { id: `msg_${ordinal}_1`, sessionID: 'session', role: 'user', time: { created } } },
         assistant(id, { id: `msg_${ordinal}_2`, time: { created: created + 1, completed: created + 2 } }),
+        { ...prompt, info: { id: `msg_${ordinal}_1`, sessionID: 'session', role: 'user', time: { created } } },
       ];
     };
     // v2 pages messages newest-first through the loader's page source rather
@@ -189,7 +188,7 @@ describe('bounded history loading', () => {
       getSessionMessages: async () => {
         requests += 1;
         return {
-          items: requests === 1 ? orderedPair(3, 'three') : [...orderedPair(1, 'one'), ...orderedPair(2, 'two')],
+          items: requests === 1 ? orderedPair(3, 'three') : [...orderedPair(2, 'two'), ...orderedPair(1, 'one')],
           cursor: { next: requests === 1 ? 'older' : 'much-older' },
         };
       },
@@ -215,7 +214,7 @@ describe('bounded history loading', () => {
     const error = new Error('offline');
     const loader = {
       ensure: async () => {}, loadOlder: async () => {},
-      getSnapshot: (): ReturnType<SessionMessageLoader['getSnapshot']> => ({ status: 'error', loadingKind: null, error, resolved: true, limit: 50, cursor: 'older', complete: false, generation: 0, updatedAt: 1 }),
+      getSnapshot: (): ReturnType<SessionMessageLoader['getSnapshot']> => ({ status: 'error', loadingKind: null, error, resolved: true, limit: 50, cursor: 'older', complete: false, generation: 0, updatedAt: 1, olderCompletedReplyIds: new Set() }),
     };
     await expect(loadSessionTitleTurns({ loader, target: { sessionID: 'session', directory: '/project' }, getRecords: () => pair('cached'), signal: new AbortController().signal })).rejects.toThrow('offline');
   });
@@ -224,6 +223,7 @@ describe('bounded history loading', () => {
     let state: ReturnType<SessionMessageLoader['getSnapshot']> = {
       status: 'error', loadingKind: null, error: new Error('offline'), resolved: true,
       limit: 50, cursor: undefined, complete: true, generation: 0, updatedAt: 1,
+      olderCompletedReplyIds: new Set(),
     };
     const loader = {
       ensure: async (_target: { directory: string; sessionID: string }, options?: { force?: boolean }) => {
@@ -240,25 +240,48 @@ describe('bounded history loading', () => {
 
 describe('generation lifecycle', () => {
   const turns = collectSessionTitleTurns(pair('one'));
-  test('calls the existing Small Model route with the target session and provider', async () => {
+  test('calls the existing Small Model route with the target directory and provider', async () => {
     let calls = 0;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
       const request = new Request(input, init);
       expect(new URL(request.url).pathname).toBe('/api/small-model/generate');
       expect(request.method).toBe('POST');
-      expect(await request.json()).toMatchObject({
-        sessionID: 'session', directory: '/project', preferredProviderID: 'provider', preferredModelID: 'model', restrictToPreferredProvider: true,
+      const body = await request.json();
+      expect(body).toMatchObject({
+        directory: '/project', preferredProviderID: 'provider', preferredModelID: 'model', restrictToPreferredProvider: true,
       });
+      const { prompt } = z.object({ prompt: z.string() }).parse(body);
+      expect(prompt.startsWith('**Current title:** Original\n\n---\n\n**User**')).toBe(true);
+      const { system } = z.object({ system: z.string() }).parse(body);
+      expect(system).toContain('only the user message decides the language');
+      expect(system).toContain('Most titles are two or three words');
+      expect(system).toContain('Leave out the name of the project');
+      expect(system).toContain('检查项目的 git 记录和未完成的计划 → 项目进度检查');
       calls += 1;
       return calls === 1 ? Response.json({ text: 'A useful title' }) : new Response('Unavailable', { status: 503 });
     };
     configureRuntimeUrlResolver({ apiBaseUrl: 'http://session-title.test' });
     try {
-      const input = { turns, sessionID: 'session', directory: '/project', signal: new AbortController().signal };
+      const input = { turns, currentTitle: 'Original', directory: '/project', signal: new AbortController().signal };
       expect(await generateSessionTitle(input)).toBe('A useful title');
       await expect(generateSessionTitle(input)).rejects.toThrow('Session title generation failed');
       expect(calls).toBe(2);
+    } finally { globalThis.fetch = originalFetch; configureRuntimeUrlResolver({ apiBaseUrl: '' }); }
+  });
+
+  test('asks the server inside the space for a session in an isolated space', async () => {
+    const paths: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      paths.push(`${new URL(request.url).pathname} ${request.headers.get('x-opencode-directory')}`);
+      return Response.json({ text: 'A useful title' });
+    };
+    configureRuntimeUrlResolver({ apiBaseUrl: 'http://session-title.test' });
+    try {
+      await generateSessionTitle({ turns, currentTitle: 'Original', directory: '/spaces/a1b2c3d4e5f6/repo', signal: new AbortController().signal });
+      expect(paths).toEqual([`/api/small-model/generate ${encodeURIComponent('/spaces/a1b2c3d4e5f6/repo')}`]);
     } finally { globalThis.fetch = originalFetch; configureRuntimeUrlResolver({ apiBaseUrl: '' }); }
   });
 

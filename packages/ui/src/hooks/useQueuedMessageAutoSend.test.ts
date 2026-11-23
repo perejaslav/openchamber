@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { z } from 'zod';
 import type { Agent, Message, Session } from '@/lib/opencode/model';
 import type { QueuedMessage } from '../stores/messageQueueStore';
 import { ChildStoreManager } from '@/sync/child-store';
@@ -6,6 +7,12 @@ import { setSyncRefs } from '@/sync/sync-refs';
 
 let visibleAgents: Agent[] = [];
 const sendMessageCalls: unknown[][] = [];
+const sendSkillsSchema = z.object({
+  skills: z.object({
+    names: z.array(z.string()),
+    instructionFor: z.custom<(names: readonly string[]) => string | null>((value) => value instanceof Function),
+  }),
+});
 
 const getVisibleAgentsMock = mock(() => visibleAgents);
 
@@ -124,6 +131,11 @@ describe('queued auto-send retry backoff', () => {
 
 describe('resolveQueuedSessionStatusType', () => {
   const DIRECTORY = '/repo';
+  const session = (id: string, parentID: string): Session => ({
+    id, parentID, projectID: 'project', directory: DIRECTORY, title: id, cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 1 },
+  });
 
   const assistantMessage = (id: string, completed?: number): Message => ({
     id,
@@ -167,12 +179,12 @@ describe('resolveQueuedSessionStatusType', () => {
     expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
   });
 
-  test('treats an idle parent as busy while its background subagent runs', () => {
+  test('resolves an idle parent as idle while its background subagents run', () => {
     const store = childStores.ensureChild(DIRECTORY, { bootstrap: false });
-    const child = { id: 'ses_child', parentID: 'ses_1' } as Session;
-    store.setState({ session: [child], session_status: { ses_child: { type: 'busy' } } });
-    expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('busy');
-    store.setState({ session_status: {} });
+    store.setState({
+      session: [session('ses_child', 'ses_1'), session('ses_grandchild', 'ses_child')],
+      session_status: { ses_child: { type: 'busy' }, ses_grandchild: { type: 'busy' } },
+    });
     expect(resolveQueuedSessionStatusType('ses_1', DIRECTORY)).toBe('idle');
   });
 
@@ -215,7 +227,7 @@ describe('buildQueuedAutoSendPayload', () => {
   });
 
   test('delivers the captured mention and context instead of re-parsing the content', () => {
-    const metadata = { openchamberContext: { kind: 'github-issue' as const, number: 3, title: 'Bug', url: 'https://x/issues/3' } };
+    const metadata = { openchamberContext: { kind: 'repository-issue' as const, number: 3, title: 'Bug', url: 'https://x/issues/3' } };
     const queue: QueuedMessage[] = [
       {
         id: 'queued-mention',
@@ -335,7 +347,22 @@ describe('buildQueuedAutoSendPayload', () => {
             restorableAttachments: [],
           },
         ],
+        queuedGoal: null,
     });
+  });
+
+  test('auto-send hands the queued skills to the send, which attaches the ones OpenCode knows', async () => {
+    const payload = buildQueuedAutoSendPayload([
+      { id: 'queued-skill', content: 'go $setup', text: 'go $setup', skills: ['setup'], createdAt: 1 },
+    ]);
+    await sendQueuedAutoSendPayload({ runtimeKey: 'runtime-original', sessionId: 'session-original', directory: '/repo' }, payload!, {
+      providerID: 'provider-1',
+      modelID: 'model-1',
+    });
+
+    const { skills } = sendSkillsSchema.parse(sendMessageCalls.at(-1)?.[9]);
+    expect(skills.names).toEqual(['setup']);
+    expect(skills.instructionFor(['setup'])).toContain('$setup');
   });
 
   test('auto-send targets the queued session explicitly', async () => {
@@ -384,7 +411,24 @@ describe('buildQueuedAutoSendPayload', () => {
             restorableAttachments: [],
           },
         ],
+        // Queued without a goal: the composer's armed goal is not this message's.
+        queuedGoal: null,
       },
     ]);
+  });
+
+  test('a message queued as a goal is sent with that goal', async () => {
+    const goal = { objective: 'the whole plan', tokenBudget: 5000 };
+    const payload = buildQueuedAutoSendPayload([
+      { id: 'queued-goal', content: 'Implement this plan', text: 'Implement this plan', createdAt: 1, goal },
+    ]);
+
+    await sendQueuedAutoSendPayload({
+      runtimeKey: 'runtime-original',
+      sessionId: 'session-original',
+      directory: '/repo',
+    }, payload!, { providerID: 'provider-1', modelID: 'model-1' });
+
+    expect(sendMessageCalls[0]?.[9]).toMatchObject({ queuedGoal: goal });
   });
 });

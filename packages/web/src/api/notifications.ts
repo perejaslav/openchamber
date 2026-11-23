@@ -1,4 +1,5 @@
 import type { NotificationPayload, NotificationsAPI } from '@openchamber/ui/lib/api/types';
+import { navigateFromNotification } from '@openchamber/ui/lib/router/notificationNavigation';
 
 const SW_READY_TIMEOUT_MS = 1500;
 const NOTIFICATION_DEDUPE_TTL_MS = 5000;
@@ -9,6 +10,64 @@ const notificationClaims = new Map<string, number>();
 const isClientFocused = (): boolean => {
   if (typeof document === 'undefined') return true;
   return document.visibilityState === 'visible' && document.hasFocus();
+};
+
+const buildSessionTargetUrl = (sessionId?: string): string | null => {
+  if (typeof sessionId !== 'string') return null;
+  const trimmed = sessionId.trim();
+  if (!trimmed) return null;
+  return `/?session=${encodeURIComponent(trimmed)}`;
+};
+
+type NotificationTarget = {
+  url: string;
+  sessionId: string;
+};
+
+const getNotificationTarget = (payload?: NotificationPayload): NotificationTarget | undefined => {
+  const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : '';
+  if (!sessionId) return undefined;
+  const url = buildSessionTargetUrl(sessionId);
+  if (!url) return undefined;
+  return { url, sessionId };
+};
+
+type NotificationOptionsWithTarget = NotificationOptions & {
+  data?: NotificationTarget;
+  renotify?: boolean;
+};
+
+const withNotificationTarget = (
+  payload: NotificationPayload | undefined,
+  target: NotificationTarget | undefined,
+): NotificationOptionsWithTarget => {
+  const options: NotificationOptionsWithTarget = {
+    body: payload?.body,
+    tag: payload?.tag,
+  };
+  if (payload?.tag) {
+    options.renotify = true;
+  }
+  if (target) {
+    options.data = target;
+  }
+  return options;
+};
+
+const focusOrOpenNotificationTarget = (target?: NotificationTarget): void => {
+  try {
+    if (typeof window === 'undefined') return;
+    if (typeof window.focus === 'function') {
+      window.focus();
+    }
+    if (!target) return;
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current === target.url) return;
+    if (navigateFromNotification(target.url)) return;
+    window.location.assign(target.url);
+  } catch {
+    // Navigation is best-effort; the notification was already shown.
+  }
 };
 
 const getNotificationClaimKey = (payload?: NotificationPayload): string => {
@@ -103,10 +162,11 @@ const notifyWithServiceWorker = async (payload?: NotificationPayload): Promise<b
   }
 
   try {
-    await registration.showNotification(payload?.title ?? 'OpenChamber', {
-      body: payload?.body,
-      tag: payload?.tag,
-    });
+    const target = getNotificationTarget(payload);
+    await registration.showNotification(
+      payload?.title ?? 'OpenChamber',
+      withNotificationTarget(payload, target),
+    );
     return true;
   } catch (error) {
     console.warn('Failed to send notification via service worker', error);
@@ -150,9 +210,9 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
     return false;
   }
 
-  // Background push is the delivery channel when the web/PWA client is not
-  // focused. Keep the main notification toggle and templates enabled, but avoid
-  // also showing the same foreground notification from a hidden page.
+
+
+
   if (!isClientFocused() && await hasActivePushSubscription()) {
     return true;
   }
@@ -162,16 +222,22 @@ const notifyWithWebAPI = async (payload?: NotificationPayload): Promise<boolean>
   }
 
   try {
-    // Some installed PWAs expose Notification.permission but only allow
-    // notifications through an active service worker registration.
+
+
     if (await notifyWithServiceWorker(payload)) {
       return true;
     }
 
-    new Notification(payload?.title ?? 'OpenChamber', {
-      body: payload?.body,
-      tag: payload?.tag,
-    });
+    const target = getNotificationTarget(payload);
+    const notification = new Notification(
+      payload?.title ?? 'OpenChamber',
+      withNotificationTarget(payload, target),
+    );
+    notification.onclick = (event) => {
+      event.preventDefault();
+      focusOrOpenNotificationTarget(target);
+      notification.close();
+    };
     return true;
   } catch (error) {
     console.warn('Failed to send notification', error);
@@ -198,7 +264,9 @@ const notifyWithDesktop = async (payload?: NotificationPayload): Promise<boolean
         kind: payload?.kind,
         sessionId: payload?.sessionId,
         directory: payload?.directory,
+        runtimeKey: payload?.runtimeKey,
         requireHidden: payload?.requireHidden,
+        showWhenFocused: payload?.showWhenFocused,
       },
     });
     return true;

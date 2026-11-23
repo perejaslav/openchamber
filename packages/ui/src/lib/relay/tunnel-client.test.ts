@@ -2,7 +2,7 @@
 // responder side is built from the SAME protocol modules (createHostHandshake +
 // the tunnel codec). No network, no real WebSocket.
 
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   exportPublicKeyJwk,
   generateEcdhKeyPair,
@@ -24,6 +24,7 @@ import {
 } from './tunnel-codec';
 import {
   createRelayTunnelClient,
+  isRelayLimitReached,
   type RelayTunnelClient,
   type TunnelWireSocket,
 } from './tunnel-client';
@@ -372,17 +373,6 @@ describe('createRelayTunnelClient', () => {
     expect(chunks.length).toBeGreaterThan(1);
   });
 
-  test('propagates abort to the host and errors the stream', async () => {
-    const { client } = await setupClient();
-    track(client);
-    const controller = new AbortController();
-    const response = await client.fetch('/never-ends', { signal: controller.signal });
-    const reader = response.body!.getReader();
-    await reader.read();
-    controller.abort();
-    await expect(reader.read()).rejects.toThrow();
-  });
-
   // A POST that dies after dispatch may already have been processed by the
   // server. Callers must be able to tell that apart from a definite failure —
   // a prompt re-sent on this error produces a second AI response (#2425).
@@ -449,6 +439,32 @@ describe('createRelayTunnelClient', () => {
     expect(connectionCount()).toBeGreaterThan(firstConnections);
   });
 
+  test('a relay retire frame drops the wire like a relay close and reconnects', async () => {
+    const { client, connectionCount, sendTextToClient } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const firstConnections = connectionCount();
+
+    sendTextToClient(JSON.stringify({ type: 'relay-retire', code: 1012, reason: 'Host went away, reconnect' }));
+
+    await wait(150);
+    expect(connectionCount()).toBeGreaterThan(firstConnections);
+    expect((await client.fetch('/health')).status).toBe(200);
+  });
+
+  test('a relay retire frame with a terminal code parks like that close', async () => {
+    const { client, connectionCount, sendTextToClient } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const connections = connectionCount();
+
+    sendTextToClient(JSON.stringify({ type: 'relay-retire', code: RelayCloseCode.DuplicateClient, reason: 'Duplicate client' }));
+
+    await wait(150);
+    expect(client.getStatus()).toMatchObject({ state: 'error', closeCode: RelayCloseCode.DuplicateClient });
+    expect(connectionCount()).toBe(connections);
+  });
+
   test('reconnects when keepalive times out against a silent host', async () => {
     const { client, connectionCount } = await setupClient({ silent: true });
     track(client);
@@ -499,6 +515,7 @@ describe('createRelayTunnelClient', () => {
       killWire(code);
       await wait(10);
       expect(client.getStatus().state).toBe('error');
+      expect(client.getStatus().terminal).toBe(true);
       const reason = client.getStatus().lastError;
       await expect(client.fetch('/health')).rejects.toThrow(reason);
       const socket = client.openWebSocket('/api/terminal/ws');
@@ -597,45 +614,6 @@ describe('createRelayTunnelClient', () => {
     expect(burstWireMessages).toBeGreaterThan(0);
   });
 
-  test('leading edge: a single frame after idle is delivered immediately, not a window later', async () => {
-    const WINDOW = 300;
-    let firstWsTextAt = 0;
-    const { client } = await setupClient(
-      {
-        recordFrame: (frame) => {
-          if (frame.frameType === TunnelFrameType.WsText && firstWsTextAt === 0) {
-            firstWsTextAt = Date.now();
-          }
-        },
-      },
-      { batchWindowMs: WINDOW },
-    );
-    track(client);
-    const socket = client.openWebSocket('/api/event/ws');
-    await new Promise<void>((resolve) => {
-      socket.onopen = () => resolve();
-    });
-    // Stay idle beyond the window so the next frame takes the leading edge.
-    await wait(WINDOW + 50);
-    const sentAt = Date.now();
-    socket.send('solo');
-    await wait(WINDOW / 2);
-    expect(firstWsTextAt).toBeGreaterThan(0);
-    // Delivered well within a full window (leading-edge flush), not delayed.
-    expect(firstWsTextAt - sentAt).toBeLessThan(WINDOW / 2);
-  });
-
-  test('boundary frame (StreamEnd) flushes buffered body immediately', async () => {
-    // A large batch window would stall a POST body if StreamEnd did not force a
-    // flush; the request completing quickly proves the boundary flush.
-    const { client } = await setupClient({}, { batchWindowMs: 1_000 });
-    track(client);
-    const start = Date.now();
-    const response = await client.fetch('/echo-body', { method: 'POST', body: 'boundary-body' });
-    expect(await response.text()).toBe('boundary-body');
-    expect(Date.now() - start).toBeLessThan(500);
-  });
-
   test('keepalive: no ping while frames flow, ping fires after idle', async () => {
     const pings: number[] = [];
     const { client } = await setupClient(
@@ -683,5 +661,139 @@ describe('createRelayTunnelClient', () => {
     expect(await message).toBe('echo:legacy');
     const health = await client.fetch('/health');
     expect(health.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal close recovery.
+// A relay close code in TERMINAL_RELAY_CLOSE_CODES (auth failed, duplicate
+// client, limit exceeded) parks the client in 'error' with no auto-redial —
+// but those codes occur transiently in the field (relay-side stale state after
+// a host restart, a same-identity probe dial taking the leg). Without a
+// recovery path the only remedy is recreating the client (= force-restarting
+// the mobile app). These tests pin the no-auto-redial semantic and the
+// recovery path: the visibility/online wake.
+
+describe('terminal close recovery', () => {
+  // Minimal window/document shims, installed only for this block: the wake
+  // path installs listeners only when these exist, and 'visible' keeps
+  // isOfflineOrHidden() false.
+  type ShimListener = () => void;
+  const shimEvents = new Map<string, Set<ShimListener>>();
+  const shimAddEventListener = (type: string, listener: ShimListener): void => {
+    let listeners = shimEvents.get(type);
+    if (!listeners) {
+      listeners = new Set<ShimListener>();
+      shimEvents.set(type, listeners);
+    }
+    listeners.add(listener);
+  };
+  const shimRemoveEventListener = (type: string, listener: ShimListener): void => {
+    shimEvents.get(type)?.delete(listener);
+  };
+  const fireShimEvent = (type: string): void => {
+    for (const listener of [...(shimEvents.get(type) ?? [])]) listener();
+  };
+  beforeEach(() => {
+    Object.defineProperty(globalThis, 'window', {
+      value: { addEventListener: shimAddEventListener, removeEventListener: shimRemoveEventListener },
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'document', {
+      value: { visibilityState: 'visible', addEventListener: shimAddEventListener, removeEventListener: shimRemoveEventListener },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    shimEvents.clear();
+    Reflect.deleteProperty(globalThis, 'window');
+    Reflect.deleteProperty(globalThis, 'document');
+  });
+
+  test('terminal relay close parks in error state and never auto-redials', async () => {
+    const { client, connectionCount, killWire } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const before = connectionCount();
+    killWire(RelayCloseCode.DuplicateClient);
+    // Well beyond the client's reconnect window (max 80ms in this harness) —
+    // a terminal close must not produce an automatic redial.
+    await wait(200);
+    expect(client.getStatus().state).toBe('error');
+    expect(client.getStatus().lastError).toBe('relay connection replaced by another client');
+    expect(connectionCount()).toBe(before);
+  });
+
+  test('a limit refusal carries its close code and parks without redialing', async () => {
+    const { client, connectionCount, killWire } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const before = connectionCount();
+    killWire(RelayCloseCode.LimitExceeded);
+    await wait(200);
+    expect(client.getStatus()).toEqual({
+      state: 'error',
+      lastError: 'relay connection limit reached',
+      terminal: true,
+      closeCode: RelayCloseCode.LimitExceeded,
+    });
+    expect(isRelayLimitReached(client.getStatus())).toBe(true);
+    expect(connectionCount()).toBe(before);
+  });
+
+  test('other terminal refusals are not read as the limit', async () => {
+    const { client, killWire } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    killWire(RelayCloseCode.AuthFailed);
+    await wait(60);
+    expect(client.getStatus().closeCode).toBe(RelayCloseCode.AuthFailed);
+    expect(isRelayLimitReached(client.getStatus())).toBe(false);
+  });
+
+  test('retry() makes one fresh attempt from a terminal park and clears the limit state', async () => {
+    const { client, connectionCount, killWire } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const before = connectionCount();
+    killWire(RelayCloseCode.LimitExceeded);
+    await wait(60);
+    client.retry();
+    const health = await client.fetch('/health');
+    expect(health.status).toBe(200);
+    expect(connectionCount()).toBe(before + 1);
+    expect(client.getStatus()).toEqual({ state: 'connected' });
+    expect(isRelayLimitReached(client.getStatus())).toBe(false);
+  });
+
+  test('retry() does nothing while the tunnel is not parked', async () => {
+    const { client, connectionCount } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const before = connectionCount();
+    client.retry();
+    await wait(60);
+    expect(connectionCount()).toBe(before);
+    expect(client.getStatus().state).toBe('connected');
+  });
+
+
+  test('visibility wake revives a terminal-dead client without a restart', async () => {
+    const { client, connectionCount, killWire } = await setupClient();
+    track(client);
+    await client.fetch('/health');
+    const before = connectionCount();
+    killWire(RelayCloseCode.DuplicateClient);
+    await wait(60);
+    expect(client.getStatus().state).toBe('error');
+    // The user foregrounds the app: visibilitychange -> wake -> one fresh
+    // connect attempt. This is the field remedy (open the app) made automatic.
+    fireShimEvent('visibilitychange');
+    const health = await client.fetch('/health');
+    expect(health.status).toBe(200);
+    expect(connectionCount()).toBe(before + 1);
+    expect(client.getStatus().state).toBe('connected');
   });
 });

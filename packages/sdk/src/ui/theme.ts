@@ -68,19 +68,29 @@ const TOKEN_VARS = [
   ['--radius', 'radius'],
 ] as const;
 
-/**
- * Paint the host theme onto the iframe root. Guest chrome reads these
- * variables, and the root itself gets the host font and text colour so plain
- * DOM the guest draws outside the kit (a `<pre>`, a `<p>`) inherits them
- * instead of the browser's serif default.
- */
+const SYNTAX_TOKEN_VARS = [
+  ['--oc-syntax-keyword', '--syntax-keyword', 'syntaxKeyword'],
+  ['--oc-syntax-string', '--syntax-string', 'syntaxString'],
+  ['--oc-syntax-number', '--syntax-number', 'syntaxNumber'],
+  ['--oc-syntax-function', '--syntax-function', 'syntaxFunction'],
+  ['--oc-syntax-type', '--syntax-type', 'syntaxType'],
+  ['--oc-syntax-comment', '--syntax-comment', 'syntaxComment'],
+  ['--oc-syntax-variable', '--syntax-variable', 'syntaxVariable'],
+  ['--oc-syntax-operator', '--syntax-operator', 'syntaxOperator'],
+] as const;
+
 export const applyHostTheme = (theme: HostTheme, root: ThemeRoot): void => {
   root.style.colorScheme = theme.mode;
   for (const [name, key] of TOKEN_VARS) {
     root.style.setProperty(name, theme.tokens[key]);
   }
+  for (const [alias, hostName, key] of SYNTAX_TOKEN_VARS) {
+    const value = theme.tokens[key] ?? '';
+    root.style.setProperty(alias, value);
+    root.style.setProperty(hostName, value);
+  }
   root.style.setProperty('font-family', theme.tokens.font);
-  root.style.setProperty('font-size', '0.875rem');
+  root.style.setProperty('font-size', theme.tokens.fontSize ?? '0.875rem');
   root.style.setProperty('line-height', '1.45');
   root.style.setProperty('color', theme.tokens.foreground);
 };

@@ -15,7 +15,6 @@ import {
   SETTINGS_HELPER_CLASS,
   SETTINGS_OPTION_STACK_CLASS,
   SETTINGS_SELECT_ROW_TRIGGER_CLASS,
-  SETTINGS_SELECT_SIZE,
   SettingsCheckboxRow,
   SettingsFieldRow,
   SettingsSection,
@@ -39,9 +38,16 @@ const DEFAULT_VARIANT_VALUE = '__default__';
 const SAVE_DEBOUNCE_MS = 500;
 
 
+const isStoredFormOf = (server: RoutingConfig, draft: RoutingConfig): boolean => {
+  const trimmed = (config: RoutingConfig) => JSON.stringify({
+    ...config,
+    categories: config.categories.map((category) => ({ ...category, name: category.name.trim(), description: category.description.trim() })),
+  });
+  return trimmed(server) === trimmed(draft);
+};
+
 const slugify = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64);
 
-/** The thinking levels OpenCode reports for one model; empty when the model has none. */
 const useModelVariants = (providerID: string | null | undefined, modelID: string | null | undefined): string[] => {
   const providers = useConfigStore((state) => state.providers);
   return React.useMemo(() => {
@@ -51,6 +57,10 @@ const useModelVariants = (providerID: string | null | undefined, modelID: string
     return modelVariantNames(model);
   }, [modelID, providerID, providers]);
 };
+
+const knownVariant = (value: string | null | undefined, variants: string[]): string | null => (
+  value && (variants.length === 0 || variants.includes(value)) ? value : null
+);
 
 const VariantSelect: React.FC<{
   providerID: string | null | undefined;
@@ -62,13 +72,14 @@ const VariantSelect: React.FC<{
 }> = ({ providerID, modelID, value, onChange, ariaLabel, className }) => {
   const { t } = useI18n();
   const variants = useModelVariants(providerID, modelID);
+  const selected = knownVariant(value, variants) ?? DEFAULT_VARIANT_VALUE;
   const label = (variant: string) => (variant === DEFAULT_VARIANT_VALUE
     ? t('settings.routing.thinking.default')
     : variant.charAt(0).toUpperCase() + variant.slice(1));
   return (
-    <Select value={value ?? DEFAULT_VARIANT_VALUE} onValueChange={(next) => onChange(next === DEFAULT_VARIANT_VALUE ? null : next)} disabled={variants.length === 0}>
-      <SelectTrigger size={SETTINGS_SELECT_SIZE} className={cn(SETTINGS_SELECT_ROW_TRIGGER_CLASS, className)} aria-label={ariaLabel}>
-        <SelectValue>{label(value ?? DEFAULT_VARIANT_VALUE)}</SelectValue>
+    <Select value={selected} onValueChange={(next) => onChange(next === DEFAULT_VARIANT_VALUE ? null : next)} disabled={variants.length === 0}>
+      <SelectTrigger className={cn(SETTINGS_SELECT_ROW_TRIGGER_CLASS, className)} aria-label={ariaLabel}>
+        <SelectValue>{label(selected)}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_VARIANT_VALUE}>{label(DEFAULT_VARIANT_VALUE)}</SelectItem>
@@ -81,7 +92,6 @@ const VariantSelect: React.FC<{
 };
 
 
-/** One category: a summary row that expands into its editor. */
 const CategoryRow: React.FC<{
   category: RoutingCategory;
   expanded: boolean;
@@ -91,8 +101,10 @@ const CategoryRow: React.FC<{
   onRemove: () => void;
 }> = ({ category, expanded, onToggle, onChange, onReset, onRemove }) => {
   const { t } = useI18n();
+  const variants = useModelVariants(category.model?.providerID, category.model?.modelID);
+  const shownVariant = knownVariant(category.variant, variants);
   const modelLabel = category.model
-    ? `${category.model.modelID}${category.variant ? ` / ${category.variant}` : ''}`
+    ? `${category.model.modelID}${shownVariant ? ` / ${shownVariant}` : ''}`
     : t('settings.routing.model.useFallback');
   const summary = [modelLabel, category.agent].filter(Boolean).join(' · ');
   return (
@@ -102,7 +114,7 @@ const CategoryRow: React.FC<{
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1.5 text-left hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1.5 text-start hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Icon name={expanded ? 'arrow-down-s' : 'arrow-right-s'} className="size-4 flex-shrink-0 text-muted-foreground" />
           <span className="typography-ui-label font-medium text-foreground truncate">{category.name || category.id}</span>
@@ -194,13 +206,8 @@ export const RoutingPage: React.FC = () => {
   const [draft, setDraft] = React.useState<RoutingConfig | null>(serverConfig);
   const [newCategoryName, setNewCategoryName] = React.useState('');
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
-  // A pending edit remembers the server it was made against; a save that would
-  // run after a runtime switch is dropped rather than sent to the new server.
   const pendingRef = React.useRef<{ config: RoutingConfig; runtimeKey: string } | null>(null);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Saves run one after another, and the server's copy is adopted only while
-  // nothing is pending or in flight, so an older response cannot replace a
-  // newer draft.
   const saveChainRef = React.useRef<Promise<void>>(Promise.resolve());
   const savesInFlightRef = React.useRef(0);
 
@@ -208,9 +215,9 @@ export const RoutingPage: React.FC = () => {
     void load();
   }, [load]);
 
-  // The server is authoritative; adopt its config whenever nothing is mid-edit.
   React.useEffect(() => {
-    if (!pendingRef.current && savesInFlightRef.current === 0) setDraft(serverConfig);
+    if (pendingRef.current || savesInFlightRef.current > 0) return;
+    setDraft((current) => (current && serverConfig && isStoredFormOf(serverConfig, current) ? current : serverConfig));
   }, [serverConfig]);
 
   const flush = React.useCallback(() => {
@@ -243,23 +250,19 @@ export const RoutingPage: React.FC = () => {
     void flush();
   }, [flush]);
 
-  // A first visit starts from the session defaults: the model the user already
-  // chose for new sessions is the natural fallback, and it saves a required step.
   const settingsDefaultModel = useConfigStore((state) => state.settingsDefaultModel);
   const settingsDefaultVariant = useConfigStore((state) => state.settingsDefaultVariant);
   const prefilledRef = React.useRef(false);
   React.useEffect(() => {
     if (prefilledRef.current || !loaded || !serverConfig || serverConfig.fallback) return;
     const parsed = parseModelIdentifier(settingsDefaultModel);
-    // A default of Auto is what this fallback exists to resolve; nothing to prefill from it.
     if (!parsed || isAutoModel(parsed.providerId, parsed.modelId)) return;
     prefilledRef.current = true;
     update((config) => (config.fallback ? config : {
       ...config,
       fallback: { model: { providerID: parsed.providerId, modelID: parsed.modelId }, variant: settingsDefaultVariant ?? null },
     }));
-  // `update` is stable; the effect keys on what decides whether to prefill.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, serverConfig, settingsDefaultModel, settingsDefaultVariant]);
 
   const update = React.useCallback((mutate: (config: RoutingConfig) => RoutingConfig) => {
@@ -327,7 +330,7 @@ export const RoutingPage: React.FC = () => {
   return (
     <SettingsPageLayout
       title={t('settings.page.routing.title')}
-      description={t('settings.page.routing.description')}
+      namedBySidebar
       showSaveStatus
     >
       {loadError ? <p className={SETTINGS_DESCRIPTION_CLASS}>{t('settings.routing.loadError', { error: loadError })}</p> : null}
@@ -335,7 +338,7 @@ export const RoutingPage: React.FC = () => {
         <p className={SETTINGS_DESCRIPTION_CLASS}>{t('settings.routing.unavailable')}</p>
       ) : (
         <>
-          <SettingsSection title={t('settings.routing.auto.title')} divider={false}>
+          <SettingsSection title={t('settings.routing.auto.title')}>
             <div className={SETTINGS_FIELDS_STACK_CLASS}>
               <JevAccessNote />
               <div className={SETTINGS_OPTION_STACK_CLASS}>
@@ -347,6 +350,16 @@ export const RoutingPage: React.FC = () => {
                   ariaLabel={t('settings.routing.auto.enable')}
                   info={t('settings.routing.auto.enableInfo')}
                 />
+                {draft.preserveCache === undefined ? null : (
+                  <SettingsCheckboxRow
+                    settingsItem="routing.preserve-cache"
+                    checked={draft.preserveCache}
+                    onChange={(checked) => update((config) => ({ ...config, preserveCache: checked }))}
+                    label={t('settings.routing.auto.preserveCache')}
+                    ariaLabel={t('settings.routing.auto.preserveCache')}
+                    info={t('settings.routing.auto.preserveCacheInfo')}
+                  />
+                )}
               </div>
               <p className={SETTINGS_HELPER_CLASS}>{readinessText}</p>
               <SettingsFieldRow
@@ -381,7 +394,7 @@ export const RoutingPage: React.FC = () => {
           <SettingsSection title={t('settings.routing.categories.title')}>
             <div className={SETTINGS_FIELDS_STACK_CLASS}>
               <p className={SETTINGS_HELPER_CLASS}>{t('settings.routing.categories.description')}</p>
-              <div className="divide-y divide-border/40 border-y border-border/40">
+              <div className="divide-y divide-edge-muted border-y border-edge-muted">
                 {draft.categories.map((category) => (
                   <CategoryRow
                     key={category.id}

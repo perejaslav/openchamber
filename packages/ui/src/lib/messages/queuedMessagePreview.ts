@@ -16,16 +16,22 @@ function contextPreview(payload: ContextPartPayload): string {
             return payload.text.trim() || payload.label.trim() || payload.output;
         case 'terminal':
             return payload.output.trim() || payload.terminalLabel;
-        case 'github-issue':
-        case 'github-pr':
-        case 'linear-issue':
+        case 'repository-issue':
+        case 'repository-discussion':
+        case 'change-request':
+        case 'tracker-item':
         case 'guest-issue':
         case 'guest-pr':
             return payload.title.trim() || payload.url;
+        case 'session':
+            return payload.title;
+        case 'session-message':
+            return payload.excerpt;
+        case 'shared-page':
+            return payload.title || payload.host;
     }
 }
 
-/** Display-only summary; never substitute it for the editable or delivered text. */
 export function getQueuedMessagePreview(message: Pick<QueuedMessage, 'content' | 'context' | 'contextPreview' | 'attachments'>): string {
     let text = message.content.trim() || message.contextPreview?.trim() || '';
     if (!text) {

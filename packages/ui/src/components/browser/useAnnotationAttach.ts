@@ -1,64 +1,63 @@
 import React from 'react';
 
+import { focusChatInput } from '@/components/chat/composer/editor/dom';
 import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
-import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
+import { createInlineCommentDraftId, useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
 import { useInputStore } from '@/sync/input-store';
+import { readComposerAddress } from '@/hooks/useComposerAddress';
 import { formatBrowserAnnotationPrompt } from '@/lib/browser/annotationPrompt';
+import { saveAnnotationScreenshot } from '@/lib/browser/annotationScreenshotStore';
+import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { AnnotationSessionResult } from '@/lib/browser/annotationSession';
 import type { BrowserAnnotationOverlayLabels } from '@/lib/browser/annotationOverlay';
 
-/**
- * Attaches a finished annotation to the active composer.
- *
- * The screenshot is attached before the text so that a failed image upload
- * cannot leave a prompt claiming an attachment that never arrived — the text
- * states what actually happened.
- */
-export const useAnnotationAttach = (directory: string) => {
+export const useAnnotationAttach = (directory: string, intro?: string) => {
   const { t } = useI18n();
-  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
-  const newSessionDraftOpen = useSessionUIStore((state) => state.newSessionDraft?.open);
   const addInlineCommentDraft = useInlineCommentDraftStore((state) => state.addDraft);
   const addAttachedFile = useInputStore((state) => state.addAttachedFile);
 
   return React.useCallback(async (result: AnnotationSessionResult): Promise<void> => {
-    const sessionKey = currentSessionId ?? (newSessionDraftOpen ? 'draft' : null);
-    if (!sessionKey) {
+    const { inline: target, attachments } = readComposerAddress(directory);
+    if (!target) {
       toast.error(t('contextPanel.browser.annotate.noSession'));
       return;
     }
 
-    let screenshotAttached = false;
+    let attachedScreenshot: AttachedFile | undefined;
     if (result.screenshot) {
       try {
-        await addAttachedFile(result.screenshot);
-        screenshotAttached = true;
+        await addAttachedFile(result.screenshot, attachments, ([landed]) => { attachedScreenshot = landed; });
       } catch {
-        screenshotAttached = false;
+        attachedScreenshot = undefined;
       }
     }
+    const screenshot = attachedScreenshot?.filename;
+    const screenshotAttached = screenshot !== undefined;
+    const draftId = createInlineCommentDraftId();
+    if (attachedScreenshot) await saveAnnotationScreenshot(draftId, attachedScreenshot);
 
-    addInlineCommentDraft({ directory, sessionKey }, {
+    addInlineCommentDraft(target, {
+      id: draftId,
       source: 'preview-annotation',
-      fileLabel: result.payload.pageUrl || 'browser',
+      fileLabel: result.payload.pageUrl || result.payload.pageTitle || 'browser',
       startLine: 1,
       endLine: 1,
       code: formatBrowserAnnotationPrompt({
-        payload: result.payload,
+        payload: { ...result.payload, comment: '' },
         screenshotAttached,
-        intro: t('contextPanel.browser.annotate.intro'),
+        intro: intro ?? t('contextPanel.browser.annotate.intro'),
       }),
       language: 'markdown',
-      text: '',
-    });
+      text: result.payload.comment.trim(),
+      screenshot,
+    }, { written: true });
 
     toast.success(t('contextPanel.browser.annotate.attached'));
-  }, [addAttachedFile, addInlineCommentDraft, currentSessionId, directory, newSessionDraftOpen, t]);
+    requestAnimationFrame(focusChatInput);
+  }, [addAttachedFile, addInlineCommentDraft, directory, intro, t]);
 };
 
-/** Overlay labels, resolved through i18n so the in-page UI follows the app locale. */
 export const useAnnotationOverlayLabels = (): BrowserAnnotationOverlayLabels => {
   const { t } = useI18n();
   return React.useMemo(() => ({

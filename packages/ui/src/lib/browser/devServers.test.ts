@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { mergeDevServerCandidates } from './devServers';
+import { mergeDevServerCandidates, placeDevServerCandidates } from './devServers';
 
 const discovered = [
   { port: 3000, url: 'http://localhost:3000/', command: 'node' },
@@ -36,6 +36,14 @@ describe('dev server candidates', () => {
     expect(merged.map((entry) => entry.port)).not.toContain(9999);
   });
 
+  test('carries what each port serves', () => {
+    const merged = mergeDevServerCandidates({
+      announced: [],
+      discovered: [{ ...discovered[0]!, page: { title: 'Shop', icon: null } }, { ...discovered[1]!, page: null }],
+    });
+    expect(merged.map((entry) => entry.page)).toEqual([{ title: 'Shop', icon: null }, null]);
+  });
+
   test('lists servers that never announced themselves', () => {
     const merged = mergeDevServerCandidates({ announced: [], discovered });
     expect(merged.map((entry) => entry.port)).toEqual([3000, 4321, 4323]);
@@ -61,5 +69,110 @@ describe('dev server candidates', () => {
   test('is empty when neither source has anything', () => {
     expect(mergeDevServerCandidates({ announced: [], discovered: null })).toEqual([]);
     expect(mergeDevServerCandidates({ announced: [], discovered: [] })).toEqual([]);
+  });
+
+  test('keeps the folder a server runs in', () => {
+    const merged = mergeDevServerCandidates({
+      announced: [],
+      discovered: [{ port: 3000, url: 'http://localhost:3000/', command: 'node', directory: '/work/site' }],
+    });
+    expect(merged[0]?.directory).toBe('/work/site');
+  });
+
+  test('keeps the process name for discovered and announced servers', () => {
+    const candidates = mergeDevServerCandidates({
+      announced: ['http://localhost:4323/app'],
+      discovered: [
+        { port: 3000, url: 'http://localhost:3000/', command: 'bun' },
+        { port: 4323, url: 'http://localhost:4323/', command: 'node' },
+        { port: 5000, url: 'http://localhost:5000/', command: '' },
+      ],
+    });
+    const placed = placeDevServerCandidates({ candidates, folders: [], directory: '/work' });
+    expect(placed.find((entry) => entry.port === 4323)?.command).toBe('node');
+    expect(placed.find((entry) => entry.port === 3000)?.command).toBe('bun');
+    expect(placed.find((entry) => entry.port === 5000)?.command).toBe('');
+    expect(mergeDevServerCandidates({ announced: ['http://localhost:4323'], discovered: null })[0]?.command).toBeUndefined();
+  });
+});
+
+describe('placing dev servers', () => {
+  const folders = [
+    { path: '/work/app', projectPath: '/work/app' },
+    { path: '/wt/app/feature', projectPath: '/work/app' },
+    { path: '/work/site', projectPath: '/work/site' },
+  ];
+  const server = (port: number, directory?: string, announced = false) => ({
+    port,
+    url: `http://localhost:${port}/`,
+    announced,
+    directory,
+  });
+  const place = (candidates: ReturnType<typeof server>[], directory = '/wt/app/feature') => (
+    placeDevServerCandidates({ candidates, folders, directory })
+  );
+
+  test('names the project or worktree folder, even from a subfolder', () => {
+    const [placed] = place([server(5173, '/wt/app/feature/packages/web')]);
+    expect(placed?.folderName).toBe('feature');
+    expect(placed?.outsideWork).toBe(false);
+  });
+
+  test('marks servers started outside every project', () => {
+    const placed = place([server(5000, '/'), server(55569, '/Users/me')]);
+    expect(placed.map((entry) => entry.outsideWork)).toEqual([true, true]);
+    expect(placed.map((entry) => entry.folderName)).toEqual([null, null]);
+  });
+
+  test('keeps a server whose folder is unknown, as on Windows', () => {
+    const [placed] = place([server(3000)]);
+    expect(placed?.outsideWork).toBe(false);
+  });
+
+  test('keeps a server that announced itself wherever it runs', () => {
+    const [placed] = place([server(8080, '/tmp/elsewhere', true)]);
+    expect(placed?.outsideWork).toBe(false);
+  });
+
+  test('does not take a sibling folder with a shared prefix for a project', () => {
+    const [placed] = place([server(3000, '/work/application')]);
+    expect(placed?.outsideWork).toBe(true);
+  });
+
+  test('orders the panel folder first, then its project, then the rest by port', () => {
+    const placed = place([
+      server(3000, '/work/site'),
+      server(4000),
+      server(5000, '/work/app'),
+      server(6000, '/wt/app/feature'),
+      server(7000, '/elsewhere', true),
+    ]);
+    expect(placed.map((entry) => entry.port)).toEqual([7000, 6000, 5000, 3000, 4000]);
+  });
+
+  test('sets aside a port that answered without a web page, unless it announced itself', () => {
+    const placed = placeDevServerCandidates({
+      candidates: [
+        { ...server(3000), page: { title: 'Shop', icon: null } },
+        { ...server(4000), page: null },
+        { ...server(5000, undefined, true), page: null },
+        // Not heard back yet, or a server too old to probe: kept, as before probing existed.
+        server(6000),
+      ],
+      folders,
+      directory: '/wt/app/feature',
+    });
+    expect(placed.map((entry) => [entry.port, entry.notWebPage])).toEqual([
+      [5000, false], [3000, false], [4000, true], [6000, false],
+    ]);
+  });
+
+  test('counts the panel folder as a work folder when no list knows it', () => {
+    const [placed] = placeDevServerCandidates({
+      candidates: [server(5173, '/scratch/new-thing')],
+      folders,
+      directory: '/scratch/new-thing',
+    });
+    expect(placed?.outsideWork).toBe(false);
   });
 });

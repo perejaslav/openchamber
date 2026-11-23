@@ -124,6 +124,34 @@ const startInstances = async (count, task) => {
 };
 
 describe('issue 2710: daily scheduled task double execution at the configured time', () => {
+  it.each(['prompt', 'command'])('marks a manual task failed when its v2 %s returns an HTML app shell', async (operation) => {
+    const task = makeTask({ kind: 'daily', times: ['23:59'] });
+    if (operation === 'command') task.execution.prompt = '/review src';
+    installOpenCodeFetch();
+    const upstream = globalThis.fetch;
+    const fetchMock = vi.fn(async (input, init) => {
+      const { pathname } = new URL(input);
+      if (operation === 'command' && pathname === '/api/command') return jsonResponse({ data: [{ name: 'review' }] });
+      if (init?.method === 'POST' && pathname.endsWith(`/${operation}`)) {
+        return new Response('<!doctype html><title>OpenChamber</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      return upstream(input, init);
+    });
+    globalThis.fetch = fetchMock;
+    const projectConfigRuntime = createSharedProjectConfigRuntime(task);
+    const runtime = createScheduledTasksRuntime(createRuntimeDeps(projectConfigRuntime));
+    try {
+      await runtime.start();
+      const result = await runtime.runNow('p1', 'task-1');
+      expect(fetchMock.mock.calls.some(([url, init]) => init?.method === 'POST' && new URL(url).pathname.endsWith(`/${operation}`))).toBe(true);
+      expect(result).toMatchObject({ ok: false, status: 'error' });
+      const tasks = await projectConfigRuntime.listScheduledTasks('p1');
+      expect(tasks[0].state.lastStatus).toBe('error');
+    } finally {
+      runtime.stop();
+    }
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     opencode.sessionCreates.length = 0;
@@ -258,7 +286,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     let completionWrites = 0;
     projectConfigRuntime.updateScheduledTaskState = vi.fn(async (pid, tid, patch) => {
       // syncTaskSchedule + claim path may write; fail the post-run completion write.
-      if (patch?.lastStatus === 'success' || patch?.lastStatus === 'error') {
+      if (patch?.lastStatus === 'sent' || patch?.lastStatus === 'error') {
         completionWrites += 1;
         throw new Error('timeout acquiring project config lock for p1');
       }
@@ -292,7 +320,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
 
     const originalUpdate = projectConfigRuntime.updateScheduledTaskState;
     projectConfigRuntime.updateScheduledTaskState = vi.fn(async (pid, tid, patch) => {
-      if (patch?.lastStatus === 'success' || patch?.lastStatus === 'error') {
+      if (patch?.lastStatus === 'sent' || patch?.lastStatus === 'error') {
         throw new Error('timeout acquiring project config lock for p1');
       }
       return originalUpdate(pid, tid, patch);
@@ -303,7 +331,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     expect(manual.sessionID).toBeTruthy();
     expect(manual.reason).toBe('completion-state-failed');
     expect(manual.persistError).toMatch(/timeout acquiring project config lock/);
-    expect(manual.task?.state?.lastStatus).toBe('success');
+    expect(manual.task?.state?.lastStatus).toBe('sent');
     expect(runtime.getStatus().runningScheduledTasksCount).toBe(0);
 
     runtime.stop();
@@ -512,7 +540,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     // Completion records state but leaves the task paused with no next run.
     const tasks = await projectConfigRuntime.listScheduledTasks('p1');
     expect(tasks[0].enabled).toBe(false);
-    expect(tasks[0].state.lastStatus).toBe('success');
+    expect(tasks[0].state.lastStatus).toBe('sent');
     expect(tasks[0].state.lastSessionId).toBe('sess-1');
     expect(tasks[0].state.nextRunAt).toBeUndefined();
 

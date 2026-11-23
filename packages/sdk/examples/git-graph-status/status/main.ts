@@ -1,9 +1,10 @@
 import { connectHost, HostRequestError, type SessionLifecyclePhase } from '@openchamber/sdk';
-import { applyHostReady, mountButton, mountCheckbox, mountTabs } from '@openchamber/sdk/ui';
+import { applyHostReady, mountButton, mountCheckbox, mountPopoverAnchor, mountTabs } from '@openchamber/sdk/ui';
 import { z } from 'zod';
 
 import { layoutGraph } from './graph.ts';
 import { STYLE, drawRail, drawRowGraph, element, graphWidth, refBadge, type RefKind } from './view.ts';
+import { startCommitPopover } from './commit-popover.ts';
 
 const host = connectHost();
 const root = document.querySelector<HTMLElement>('#root');
@@ -11,8 +12,26 @@ if (!root) throw new Error('Missing root');
 const style = document.createElement('style');
 style.textContent = STYLE;
 document.head.append(style);
+let started = false;
+host.onReady((context) => {
+  applyHostReady(context, document.documentElement);
+  if (started) return;
+  started = true;
+  if (context.surface === 'popover') {
+    startCommitPopover(root, host, context);
+    return;
+  }
+  startStatus();
+});
 
-// ----- Service answers, parsed at the boundary -----
+const startStatus = (): void => {
+host.onStatusControl((event) => {
+  if (event.id === 'header-refresh') {
+    void load();
+    return;
+  }
+  if (event.id === 'header-mode' && event.value) setMode(event.value);
+});
 
 const refKindSchema = z.enum(['local', 'remote', 'tag']);
 const logSchema = z.object({
@@ -67,8 +86,6 @@ const ask = async <T>(path: string, query: Record<string, string>, schema: z.Zod
   return parsed.data;
 };
 
-// ----- State -----
-
 let directory: string | null = null;
 let locale = 'en';
 let mode: Mode = 'auto';
@@ -78,29 +95,66 @@ let commits: Commit[] = [];
 let uncommitted = 0;
 let note: string | null = 'Loading commits…';
 let openHash: string | null = null;
+let preferencesError: string | null = null;
+let deviceStorageSupported = false;
+let statusControlsSupported = false;
+let statusControlsActive = false;
+let popoversSupported = false;
+let publishedControls: string | null = null;
+let publishingControls: string | null = null;
 const details = new Map<string, DetailState>();
+const popoverAnchors = new Set<{ dispose: () => void }>();
 let generation = 0;
 
 const refKey = (ref: { name: string; kind: RefKind }) => `${ref.kind}:${ref.name}`;
 
-// Storage keys are capped at 128 characters, so a project is named by a hash of its path.
 const prefsKey = (dir: string): string => {
   let hash = 2166136261;
   for (let index = 0; index < dir.length; index++) hash = Math.imul(hash ^ dir.charCodeAt(index), 16777619);
   return `prefs:${(hash >>> 0).toString(36)}`;
 };
 
+const storageOptions = () => deviceStorageSupported ? { scope: 'device' as const } : undefined;
+
+const reportPreferencesError = (message: string) => {
+  preferencesError = message;
+  render();
+};
+
 const savePrefs = () => {
-  if (directory) void host.storage.set(prefsKey(directory), { mode, picked: [...picked].slice(0, 50) }).catch(() => undefined);
+  if (!directory) return;
+  void host.storage.set(prefsKey(directory), { mode, picked: [...picked].slice(0, 50) }, storageOptions()).catch(() => {
+    reportPreferencesError('Could not save display preferences.');
+  });
 };
 
-const loadPrefs = async (dir: string) => {
-  const stored = prefsSchema.safeParse(await host.storage.get(prefsKey(dir)).catch(() => undefined));
-  mode = stored.success ? stored.data.mode : 'auto';
-  picked = new Set(stored.success ? stored.data.picked : []);
+const loadPrefs = async (dir: string, useDeviceStorage: boolean) => {
+  let value: unknown;
+  try {
+    value = await host.storage.get(prefsKey(dir), useDeviceStorage ? { scope: 'device' } : undefined);
+  } catch {
+    if (directory === dir && deviceStorageSupported === useDeviceStorage) {
+      reportPreferencesError('Could not load display preferences. Keeping the current view.');
+    }
+    return;
+  }
+  if (directory !== dir || deviceStorageSupported !== useDeviceStorage) return;
+  const stored = prefsSchema.safeParse(value);
+  if (!stored.success && value !== undefined) {
+    reportPreferencesError('Saved display preferences are invalid. Keeping the current view.');
+    return;
+  }
+  preferencesError = null;
+  if (value === undefined) {
+    mode = 'auto';
+    picked = new Set();
+    return;
+  }
+  if (stored.success) {
+    mode = stored.data.mode;
+    picked = new Set(stored.data.picked);
+  }
 };
-
-// ----- Loading -----
 
 const load = async () => {
   const current = ++generation;
@@ -120,7 +174,6 @@ const load = async () => {
     commits = log.commits;
     uncommitted = mode === 'manual' ? 0 : log.uncommitted;
     note = commits.length === 0 ? 'No commits yet.' : null;
-    // A detail read before a refresh may describe a rewritten commit.
     details.clear();
     if (openHash && !commits.some((commit) => commit.hash === openHash)) openHash = null;
     if (openHash) void loadDetail(openHash);
@@ -146,24 +199,63 @@ const loadDetail = async (hash: string) => {
   render();
 };
 
-// ----- Header: mode toggles, refresh, manual ref picker -----
-
 const bar = element('div', 'bar');
 const picker = element('div', 'picker');
+const preferencesNotice = element('div', 'note');
 const list = element('div');
-root.append(bar, picker, list);
+root.append(bar, picker, preferencesNotice, list);
+
+const statusControls = () => [
+  {
+    kind: 'select' as const,
+    id: 'header-mode',
+    label: 'Commit range',
+    value: mode,
+    options: [
+      { value: 'auto', label: 'Auto' },
+      { value: 'all', label: 'All' },
+      { value: 'manual', label: 'Manual' },
+    ],
+  },
+  { kind: 'button' as const, id: 'header-refresh', label: 'Refresh', disabled: !directory },
+];
+
+const publishStatusControls = () => {
+  if (!statusControlsSupported) return;
+  const controls = statusControls();
+  const signature = JSON.stringify(controls);
+  if (signature === publishedControls || signature === publishingControls) return;
+  publishingControls = signature;
+  void host.setStatusControls(controls).then(() => {
+    if (publishingControls !== signature) return;
+    publishingControls = null;
+    publishedControls = signature;
+    statusControlsActive = true;
+    render();
+    publishStatusControls();
+  }).catch(() => {
+    if (publishingControls !== signature) return;
+    publishingControls = null;
+    statusControlsActive = false;
+    publishedControls = null;
+    render();
+  });
+};
+
+const setMode = (nextValue: string) => {
+  const next = modeSchema.safeParse(nextValue);
+  if (!next.success || next.data === mode) return;
+  mode = next.data;
+  tabs.update({ activeId: mode });
+  savePrefs();
+  publishStatusControls();
+  void load();
+};
 
 const tabs = mountTabs(bar, {
   items: [{ id: 'auto', label: 'Auto' }, { id: 'all', label: 'All' }, { id: 'manual', label: 'Manual' }],
   activeId: mode,
-  onChange: (id) => {
-    const next = modeSchema.safeParse(id);
-    if (!next.success || next.data === mode) return;
-    mode = next.data;
-    tabs.update({ activeId: mode });
-    savePrefs();
-    void load();
-  },
+  onChange: setMode,
 });
 bar.append(element('span', 'grow'));
 const refresh = mountButton(bar, { label: 'Refresh', variant: 'ghost', size: 'xs', onClick: () => { void load(); } });
@@ -190,8 +282,6 @@ const renderPicker = () => {
     }
   }
 };
-
-// ----- Rows -----
 
 const absoluteDate = (iso: string): string => {
   const date = new Date(iso);
@@ -243,13 +333,17 @@ const renderDetail = (card: HTMLElement, commit: Commit) => {
 };
 
 const render = () => {
+  for (const anchor of popoverAnchors) anchor.dispose();
+  popoverAnchors.clear();
+  bar.hidden = statusControlsActive;
+  preferencesNotice.hidden = preferencesError === null;
+  preferencesNotice.textContent = preferencesError ?? '';
   refresh.update({ disabled: !directory });
   renderPicker();
   if (note) {
     list.replaceChildren(element('div', 'note', note));
     return;
   }
-  // The working tree sits on top of the checked-out commit as a row of its own.
   const headCommit = commits.find((commit) => commit.refs.some((ref) => ref.head)) ?? (mode === 'auto' ? commits[0] : undefined);
   const dirty = uncommitted > 0 && headCommit ? { hash: '(working tree)', parents: [headCommit.hash] } : null;
   const layout = layoutGraph(dirty ? [dirty, ...commits] : commits);
@@ -284,12 +378,25 @@ const render = () => {
     line.append(element('span', 'subject', commit.subject));
     text.append(line, element('div', 'meta', `${commit.author} · ${commit.when}`));
     head.append(text);
-    // One row open at a time; opening fetches its details once.
     head.addEventListener('click', () => {
       openHash = open ? null : commit.hash;
       render();
       if (openHash) void loadDetail(openHash);
     });
+    if (popoversSupported) {
+      popoverAnchors.add(mountPopoverAnchor(head, {
+        host,
+        getData: () => ({
+          sha: commit.hash,
+          refs: commit.refs.slice(0, 20).map((ref) => ({ name: ref.name, kind: ref.kind, head: ref.head })),
+          github: refs?.github ?? null,
+        }),
+        width: 340,
+        height: 220,
+        side: 'left',
+        label: `Commit preview: ${commit.subject}`,
+      }));
+    }
     row.append(head);
     if (open) {
       const detailsRow = element('div', 'details');
@@ -305,9 +412,6 @@ const render = () => {
   if (openHash) list.querySelector('.commit.open')?.scrollIntoView({ block: 'nearest' });
 };
 
-// ----- Host wiring -----
-
-// The host sizes the frame to this, up to its maximum; beyond that the page scrolls.
 let reportedHeight = -1;
 new ResizeObserver(() => {
   const height = Math.ceil(root.getBoundingClientRect().height);
@@ -319,6 +423,25 @@ new ResizeObserver(() => {
 host.onReady((context) => {
   applyHostReady(context, document.documentElement);
   locale = context.locale;
+  const nextDeviceStorage = context.features?.deviceStorage === true;
+  const nextStatusControls = context.features?.statusControls === true;
+  const nextPopovers = context.features?.popovers === true;
+  if (deviceStorageSupported !== nextDeviceStorage) {
+    deviceStorageSupported = nextDeviceStorage;
+    if (directory) void loadPrefs(directory, deviceStorageSupported);
+  }
+  if (statusControlsSupported !== nextStatusControls) {
+    statusControlsSupported = nextStatusControls;
+    statusControlsActive = false;
+    publishedControls = null;
+    publishingControls = null;
+    render();
+  }
+  if (popoversSupported !== nextPopovers) {
+    popoversSupported = nextPopovers;
+    render();
+  }
+  publishStatusControls();
 });
 
 let directorySeen = false;
@@ -326,16 +449,19 @@ host.onDirectory((next) => {
   if (directorySeen && next === directory) return;
   directorySeen = true;
   directory = next;
+  publishedControls = null;
+  publishingControls = null;
+  statusControlsActive = false;
   commits = []; refs = null; openHash = null; details.clear();
   void (async () => {
-    if (next) await loadPrefs(next);
+    if (next) await loadPrefs(next, deviceStorageSupported);
     if (directory !== next) return;
     tabs.update({ activeId: mode });
+    publishStatusControls();
     void load();
   })();
 });
 
-// An agent turn that just finished may have committed; read the history again.
 let lastPhase: SessionLifecyclePhase | null = null;
 host.onSessionLifecycle((event) => {
   const finished = lastPhase === 'started' && event.phase === 'completed';
@@ -344,3 +470,4 @@ host.onSessionLifecycle((event) => {
 });
 
 render();
+};

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildIntegrationKeyRequest,
+  createEmptyCustomProviderForm,
+  modelDiscoveryResponseSchema,
+  modelRowFromDiscovery,
   buildProviderUpsertRequest,
   storeKeyAfterConfigWrite,
   isConfigDefinedCustomProvider,
@@ -19,35 +22,119 @@ const t = (key: string) => key;
 const baseForm = (overrides: Partial<CustomProviderFormState> = {}): CustomProviderFormState => ({
   providerID: 'custom-provider',
   name: 'Custom Provider',
+  icon: 'server',
+  logo: null,
   protocol: 'openai-chat',
   baseURL: 'https://api.example.com/v1',
   apiKey: 'sk-test',
-  models: [{ row: 'm0', id: 'model-a', name: 'Model A', variants: '' }],
+  models: [{
+    row: 'm0',
+    id: 'model-a',
+    name: 'Model A',
+    contextWindow: '',
+    maxOutputTokens: '',
+    inputCapabilities: ['text'],
+    outputCapabilities: ['text'],
+    tools: true,
+    capabilitiesKnown: { tools: false, input: false, output: false },
+    variants: '',
+  }],
   headers: [{ row: 'h0', key: '', value: '' }],
+  tls: null,
+  canonical: null,
   ...overrides,
 });
 
-/** Mirrors server upsert semantics for request-construction tests. */
-function mergeProviderConfig(
-  existing: Record<string, unknown>,
-  providerID: string,
-  config: CustomProviderConfig,
-): Record<string, unknown> {
-  const providerSection = (
-    typeof existing.provider === 'object' && existing.provider !== null && !Array.isArray(existing.provider)
-      ? { ...(existing.provider as Record<string, unknown>) }
-      : {}
-  );
-  providerSection[providerID] = config;
-  const next: Record<string, unknown> = {
-    ...existing,
-    provider: providerSection,
-  };
-  if (Array.isArray(existing.disabled_providers)) {
-    next.disabled_providers = existing.disabled_providers.filter((entry) => entry !== providerID);
-  }
-  return next;
-}
+const baseModel = (overrides: Partial<CustomProviderFormState['models'][number]> = {}): CustomProviderFormState['models'][number] => ({
+  row: 'm0',
+  id: 'model-a',
+  name: 'Model A',
+  contextWindow: '',
+  maxOutputTokens: '',
+  inputCapabilities: ['text'],
+  outputCapabilities: ['text'],
+  tools: true,
+  capabilitiesKnown: { tools: false, input: false, output: false },
+  variants: '',
+  ...overrides,
+});
+
+/** The editable fields a model row carries before anyone fills them in. */
+const MODEL_ROW_DEFAULTS = {
+  contextWindow: '',
+  maxOutputTokens: '',
+  inputCapabilities: ['text'],
+  outputCapabilities: ['text'],
+  tools: true,
+  capabilitiesKnown: { tools: false, input: false, output: false },
+};
+
+describe('client certificate', () => {
+  const certificateForm = (tls: CustomProviderFormState['tls']) => validateCustomProvider({
+    form: baseForm({ tls }), t, existingProviderIDs: new Set(),
+  });
+
+  test('saves file paths as file references and keeps references, PEM text and a literal passphrase as written', () => {
+    expect(certificateForm({ cert: ' /etc/company/client.pem ', key: '~/keys/client.key', passphrase: '{env:KEY_PASS}' }).result?.config.settings)
+      .toEqual({
+        baseURL: 'https://api.example.com/v1',
+        tls: { cert: '{file:/etc/company/client.pem}', key: '{file:~/keys/client.key}', passphrase: '{env:KEY_PASS}' },
+      });
+    const pem = '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----';
+    expect(certificateForm({ cert: pem, key: 'C:\\certs\\client.key', passphrase: ' two words ' }).result?.config.settings.tls)
+      .toEqual({ cert: pem, key: '{file:C:\\certs\\client.key}', passphrase: ' two words ' });
+  });
+
+  test('cleared fields remove the certificate, and fields never loaded leave the stored one alone', () => {
+    expect(certificateForm({ cert: '', key: '', passphrase: '' }).result?.config.settings)
+      .toEqual({ baseURL: 'https://api.example.com/v1', tls: null });
+    expect(certificateForm(null).result?.config.settings).toEqual({ baseURL: 'https://api.example.com/v1' });
+  });
+
+  test('half a certificate or a relative path is refused on the field', () => {
+    const half = certificateForm({ cert: '/etc/client.pem', key: '', passphrase: '' });
+    expect(half.result).toBeUndefined();
+    expect(half.err.tlsKey).toBe('settings.providers.page.custom.error.tls.incomplete');
+    const passphraseOnly = certificateForm({ cert: '', key: '', passphrase: 'secret' });
+    expect(passphraseOnly.err.tlsCert).toBe('settings.providers.page.custom.error.tls.incomplete');
+    expect(passphraseOnly.err.tlsKey).toBe('settings.providers.page.custom.error.tls.incomplete');
+    const relative = certificateForm({ cert: 'certs/client.pem', key: '/etc/client.key', passphrase: '' });
+    expect(relative.result).toBeUndefined();
+    expect(relative.err.tlsCert).toBe('settings.providers.page.custom.error.tls.relativePath');
+    expect(relative.err.tlsKey).toBeUndefined();
+    expect(certificateForm({ cert: '{file:certs/client.pem}', key: '{env:CLIENT_KEY}', passphrase: '' }).err.tlsCert)
+      .toBe('settings.providers.page.custom.error.tls.relativePath');
+  });
+
+  test('editing shows the stored paths, never the certificate the live provider resolved', () => {
+    const live = { id: 'gw', name: 'Gateway', settings: { baseURL: 'https://gw.example/v1', tls: { cert: '-----BEGIN CERTIFICATE-----', key: '-----BEGIN KEY-----' } } };
+    expect(providerToEditFormState(live, null).tls).toBeNull();
+    const stored = { settings: { baseURL: 'https://gw.example/v1', tls: { cert: '{file:/etc/client.pem}', key: '{file:/etc/client.key}', passphrase: '{env:P}' } } };
+    expect(providerToEditFormState(live, stored).tls).toEqual({ cert: '/etc/client.pem', key: '/etc/client.key', passphrase: '{env:P}' });
+  });
+});
+
+describe('canonical provider', () => {
+  const canonicalOf = (canonical: CustomProviderFormState['canonical']) => validateCustomProvider({
+    form: baseForm({ canonical }), t, existingProviderIDs: new Set(),
+  }).result?.config;
+
+  test('a chosen provider is saved, none clears the stored one, and an unread one is left alone', () => {
+    expect(canonicalOf('openrouter')?.canonical).toBe('openrouter');
+    expect(canonicalOf('')?.canonical).toBeNull();
+    expect(canonicalOf(null)).not.toHaveProperty('canonical');
+  });
+
+  test('editing starts from the stored choice, and from none when the entry has none', () => {
+    const live = { id: 'cc', name: 'Command Code', canonical: 'anthropic', settings: { baseURL: 'https://cc.example/v1' } };
+    const stored = storedProviderEntrySchema.parse({ canonical: 'openrouter', settings: { baseURL: 'https://cc.example/v1' } });
+    expect(providerToEditFormState(live, stored).canonical).toBe('openrouter');
+    expect(providerToEditFormState(live, { settings: { baseURL: 'https://cc.example/v1' } }).canonical).toBe('');
+    // A stored entry that could not be read keeps whatever choice it holds.
+    expect(providerToEditFormState(live, null).canonical).toBeNull();
+    expect(createEmptyCustomProviderForm().canonical).toBe('');
+  });
+});
 
 describe('validateCustomProvider', () => {
   test('builds trimmed config and auth payloads', () => {
@@ -57,7 +144,7 @@ describe('validateCustomProvider', () => {
         name: ' Custom Provider ',
         baseURL: ' https://api.example.com/v1 ',
         apiKey: ' sk-secret ',
-        models: [{ row: 'm0', id: ' model-a ', name: ' Model A ', variants: '' }],
+        models: [baseModel({ id: ' model-a ', name: ' Model A ' })],
         headers: [
           { row: 'h0', key: ' X-Test ', value: ' enabled ' },
           { row: 'h1', key: '', value: '' },
@@ -69,6 +156,8 @@ describe('validateCustomProvider', () => {
 
     expect(result.result).toEqual({
       providerID: 'custom-provider',
+      icon: 'server',
+      logo: { kind: 'keep' },
       name: 'Custom Provider',
       apiKey: 'sk-secret',
       config: {
@@ -83,8 +172,129 @@ describe('validateCustomProvider', () => {
         models: {
           'model-a': { modelID: 'model-a', name: 'Model A' },
         },
+      } satisfies CustomProviderConfig,
+    });
+  });
+
+  test('persists reviewed model limits and capabilities', () => {
+    const result = validateCustomProvider({
+      form: baseForm({
+        models: [baseModel({
+          contextWindow: '128000',
+          maxOutputTokens: '16384',
+          inputCapabilities: ['text', 'image'],
+          outputCapabilities: ['text'],
+          tools: false,
+          capabilitiesKnown: { tools: true, input: true, output: true },
+        })],
+      }),
+      t,
+      existingProviderIDs: new Set(),
+    });
+
+    expect(result.result?.config.models['model-a']).toEqual({
+      modelID: 'model-a',
+      name: 'Model A',
+      limit: { context: 128000, output: 16384 },
+      capabilities: { tools: false, input: ['text', 'image'], output: ['text'] },
+    });
+  });
+
+  test('keeps the selected OpenChamber provider icon in the persistence plan', () => {
+    const result = validateCustomProvider({
+      form: baseForm({ icon: 'cloud' }),
+      t,
+      existingProviderIDs: new Set(),
+    });
+
+    expect(result.result?.icon).toBe('cloud');
+    expect('icon' in (result.result?.config ?? {})).toBe(false);
+  });
+
+  test('keeps no icon for a new provider so its own logo still shows', () => {
+    expect(createEmptyCustomProviderForm().icon).toBeNull();
+    expect(createEmptyCustomProviderForm().logo).toBeNull();
+  });
+
+  test('changes the stored logo image only through what the user did in the field', () => {
+    const planFor = (logo: CustomProviderFormState['logo']) => validateCustomProvider({
+      form: baseForm({ logo }),
+      t,
+      existingProviderIDs: new Set(),
+    }).result?.logo;
+    const file = new File(['png'], 'logo.png', { type: 'image/png' });
+
+    // Untouched: a logo kept from before, or uploaded by another client meanwhile, stays.
+    expect(planFor(null)).toEqual({ kind: 'keep' });
+    expect(planFor(file)).toEqual({ kind: 'upload', file });
+    expect(planFor('removed')).toEqual({ kind: 'remove' });
+  });
+
+  test('turns a discovered model into a row, the provider winning over models.dev field by field', () => {
+    const row = modelRowFromDiscovery({
+      id: 'llama-3',
+      name: 'llama-3',
+      limit: { context: 8192 },
+      metadata: {
+        providerID: 'meta',
+        modelID: 'llama-3',
+        name: 'Llama 3',
+        limit: { context: 128000, output: 4096 },
+        capabilities: { tools: false, input: ['text', 'image'], output: ['text'] },
       },
     });
+    expect(row.id).toBe('llama-3');
+    expect(row.name).toBe('Llama 3');
+    expect(row.contextWindow).toBe('8192');
+    expect(row.maxOutputTokens).toBe('4096');
+    expect(row.inputCapabilities).toEqual(['text', 'image']);
+    expect(row.tools).toBe(false);
+    expect(row.metadataSource).toBe('provider-api');
+  });
+
+  test('a discovered model keeps only the categories the form saves', () => {
+    const row = modelRowFromDiscovery({
+      id: 'gw',
+      name: 'gw',
+      capabilities: { tools: true, input: ['text', 'image', 'application/json'], output: ['embedding'] },
+    });
+    expect(row.inputCapabilities).toEqual(['text', 'image']);
+    // All unrecognized stays an empty list, not Text support.
+    expect(row.outputCapabilities).toEqual([]);
+  });
+
+  test('a discovered model that reports only tool calls leaves its inputs and outputs unset', () => {
+    const row = modelRowFromDiscovery(modelDiscoveryResponseSchema.parse({
+      models: [{ id: 'sonnet', name: 'sonnet', capabilities: { tools: false } }],
+    }).models[0]);
+    expect(row.tools).toBe(false);
+    expect(row.capabilitiesKnown).toEqual({ tools: true, input: false, output: false });
+  });
+
+  test('a discovered model fills each unreported capability from its catalog match', () => {
+    const metadata = {
+      providerID: 'openrouter',
+      modelID: 'sonnet',
+      capabilities: { tools: true, input: ['text', 'image', 'pdf'], output: [] },
+    };
+    const model = { id: 'sonnet', name: 'Sonnet', metadata, capabilities: { tools: false } };
+    const row = modelRowFromDiscovery(model);
+    expect(row.tools).toBe(false);
+    expect(row.inputCapabilities).toEqual(['text', 'image', 'pdf']);
+    expect(row.outputCapabilities).toEqual([]);
+    expect(row.capabilitiesKnown).toEqual({ tools: true, input: true, output: true });
+
+    const withExplicitEmpty = modelRowFromDiscovery({ ...model, capabilities: { input: [] } });
+    expect(withExplicitEmpty.inputCapabilities).toEqual([]);
+    expect(withExplicitEmpty.tools).toBe(true);
+  });
+
+  test('a discovered model nothing describes gets text in and out with tool calls', () => {
+    const row = modelRowFromDiscovery({ id: 'plain', name: 'plain' });
+    expect(row.contextWindow).toBe('');
+    expect(row.inputCapabilities).toEqual(['text']);
+    expect(row.tools).toBe(true);
+    expect(row.metadataSource).toBe(undefined);
   });
 
   test('supports {env:VAR} credentials without writing an auth key', () => {
@@ -141,8 +351,8 @@ describe('validateCustomProvider', () => {
         providerID: 'Bad ID',
         baseURL: 'ftp://example.com',
         models: [
-          { row: 'm0', id: 'model-a', name: 'Model A', variants: '' },
-          { row: 'm1', id: 'model-a', name: 'Model A 2', variants: '' },
+          baseModel(),
+          baseModel({ row: 'm1', name: 'Model A 2' }),
         ],
         headers: [
           { row: 'h0', key: 'Authorization', value: 'one' },
@@ -286,52 +496,6 @@ describe('request construction', () => {
   });
 });
 
-describe('mergeProviderConfig persistence shape', () => {
-  test('merges provider block and clears disabled_providers entry', () => {
-    const validated = validateCustomProvider({
-      form: baseForm(),
-      t,
-      existingProviderIDs: new Set(),
-    });
-    const plan = validated.result!;
-
-    const next = mergeProviderConfig(
-      {
-        model: 'openai/gpt-4o',
-        provider: {
-          openai: { name: 'OpenAI' },
-        },
-        disabled_providers: ['custom-provider', 'other'],
-      },
-      plan.providerID,
-      plan.config,
-    );
-
-    expect(next).toEqual({
-      model: 'openai/gpt-4o',
-      provider: {
-        openai: { name: 'OpenAI' },
-        'custom-provider': plan.config,
-      },
-      disabled_providers: ['other'],
-    });
-  });
-
-  test('creates provider section when missing', () => {
-    const validated = validateCustomProvider({
-      form: baseForm(),
-      t,
-      existingProviderIDs: new Set(),
-    });
-    const plan = validated.result!;
-
-    const next = mergeProviderConfig({}, plan.providerID, plan.config);
-    expect(next.provider).toEqual({
-      'custom-provider': plan.config,
-    });
-  });
-});
-
 describe('provider edit helpers', () => {
   test('detects openai-compatible custom providers and prefills form state', () => {
     expect(isCustomOpenAICompatibleProvider({
@@ -356,7 +520,7 @@ describe('provider edit helpers', () => {
     expect(state.baseURL).toBe('https://llm.example.edu/v1');
     expect(state.apiKey).toBe('{env:CAMPUS_KEY}');
     expect(state.protocol).toBe('openai-chat');
-    expect(state.models[0]).toEqual({ row: state.models[0].row, id: 'fast', name: 'Fast', variants: '', savedVariants: {} });
+    expect(state.models[0]).toEqual({ ...MODEL_ROW_DEFAULTS, row: state.models[0].row, id: 'fast', name: 'Fast', variants: '', savedVariants: {} });
     expect(state.headers[0]).toEqual({ row: state.headers[0].row, key: 'X-Campus', value: '1' });
   });
 
@@ -384,7 +548,7 @@ describe('provider edit helpers', () => {
     expect(state.protocol).toBe('anthropic-messages');
     expect(state.baseURL).toBe('https://llm.example.edu/v1');
     expect(state.headers[0]).toEqual({ row: state.headers[0].row, key: 'X-Campus', value: '1' });
-    expect(state.models[0]).toEqual({ row: state.models[0].row, id: 'fast-model', name: 'Fast', variants: '', savedVariants: {} });
+    expect(state.models[0]).toEqual({ ...MODEL_ROW_DEFAULTS, row: state.models[0].row, id: 'fast-model', name: 'Fast', variants: '', savedVariants: {} });
   });
 
   test('a v2 provider with only a known package still reads as custom', () => {
@@ -443,7 +607,7 @@ describe('provider edit helpers', () => {
 describe('custom provider reasoning levels', () => {
   test('turns typed levels into variants spelled for the protocol', () => {
     const chat = validateCustomProvider({
-      form: baseForm({ models: [{ row: 'm0', id: 'model-a', name: 'Model A', variants: 'low, medium high,low' }] }),
+      form: baseForm({ models: [baseModel({ variants: 'low, medium high,low' })] }),
       t,
       existingProviderIDs: new Set(),
     });
@@ -456,7 +620,7 @@ describe('custom provider reasoning levels', () => {
     const anthropic = validateCustomProvider({
       form: baseForm({
         protocol: 'anthropic-messages',
-        models: [{ row: 'm0', id: 'model-a', name: 'Model A', variants: 'max' }],
+        models: [baseModel({ variants: 'max' })],
       }),
       t,
       existingProviderIDs: new Set(),
@@ -468,7 +632,10 @@ describe('custom provider reasoning levels', () => {
 
   test('leaves variants out for a new model without levels', () => {
     const output = validateCustomProvider({ form: baseForm(), t, existingProviderIDs: new Set() });
-    expect(output.result?.config.models['model-a']).toEqual({ modelID: 'model-a', name: 'Model A' });
+    expect(output.result?.config.models['model-a']).toEqual({
+      modelID: 'model-a',
+      name: 'Model A',
+    });
   });
 
   test('edit keeps saved overlays and sends an empty list when levels are cleared', () => {
@@ -552,6 +719,35 @@ describe('edit form from the stored config entry', () => {
     allowExistingAuth: true,
   }).result?.config;
 
+  test('keeps a stored built-in package until the user changes the protocol', () => {
+    const cases: { packageName: string; protocol: CustomProviderFormState['protocol'] }[] = [
+      { packageName: '@opencode/ai/providers/openai-compatible', protocol: 'openai-chat' },
+      { packageName: '@opencode/ai/providers/openai-compatible/responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai-compatible-responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/openai/chat', protocol: 'openai-chat' },
+      { packageName: '@opencode/ai/providers/openai/responses', protocol: 'openai-responses' },
+      { packageName: '@opencode/ai/providers/anthropic', protocol: 'anthropic-messages' },
+      { packageName: '@opencode/ai/providers/anthropic-compatible', protocol: 'anthropic-messages' },
+    ];
+    for (const { packageName, protocol } of cases) {
+      const stored = storedProviderEntrySchema.parse({
+        name: 'Campus LLM',
+        package: packageName,
+        settings: { baseURL: 'https://llm.example.edu/v1' },
+        models: { fast: { name: 'Fast' } },
+      });
+      const form = providerToEditFormState(live, stored);
+      expect(form.protocol).toBe(protocol);
+      expect(editAndSave({ ...form, name: 'Renamed' })?.package).toBe(packageName);
+
+      const changedProtocol = protocol === 'openai-chat' ? 'anthropic-messages' : 'openai-chat';
+      expect(editAndSave({ ...form, protocol: changedProtocol })?.package).toBe(
+        changedProtocol === 'anthropic-messages' ? 'aisdk:@ai-sdk/anthropic' : 'aisdk:@ai-sdk/openai-compatible',
+      );
+    }
+  });
+
   test('keeps env and writes back only the levels the user stored', () => {
     const stored = storedProviderEntrySchema.parse({
       name: 'Campus LLM',
@@ -570,6 +766,83 @@ describe('edit form from the stored config entry', () => {
     const config = editAndSave(form);
     expect(config?.env).toEqual(['CAMPUS_KEY']);
     expect(config?.models.fast).toEqual({ modelID: 'fast', name: 'Fast', variants: [{ id: 'max', body: { think: true } }] });
+  });
+
+  test('keeps saved limits and capabilities through an edit', () => {
+    const stored = storedProviderEntrySchema.parse({
+      name: 'Campus LLM',
+      settings: { baseURL: 'https://llm.example.edu/v1' },
+      models: { vision: {
+        name: 'Vision',
+        limit: { context: 200000, output: 8192 },
+        capabilities: { tools: true, input: ['text', 'image'], output: ['text'] },
+      } },
+    });
+    const config = editAndSave(providerToEditFormState(live, stored));
+    expect(config?.models.vision?.limit).toEqual({ context: 200000, output: 8192 });
+    expect(config?.models.vision?.capabilities).toEqual({ tools: true, input: ['text', 'image'], output: ['text'] });
+  });
+
+  test('a model that overrides only tools leaves its inputs and outputs to the canonical provider', () => {
+    const stored = storedProviderEntrySchema.parse({
+      name: 'Campus LLM',
+      canonical: 'openrouter',
+      settings: { baseURL: 'https://llm.example.edu/v1' },
+      models: { sonnet: { name: 'Sonnet', capabilities: { tools: false } } },
+    });
+    const config = editAndSave(providerToEditFormState(live, stored));
+    expect(config?.models.sonnet?.capabilities).toEqual({ tools: false });
+  });
+
+  test('an inherited input list shows what OpenCode resolved, so turning one modality off keeps the others', () => {
+    const inheriting = {
+      id: 'campus-llm',
+      name: 'Campus LLM',
+      settings: { baseURL: 'https://llm.example.edu/v1' },
+      models: [{ id: 'sonnet', modelID: 'sonnet', name: 'Sonnet', capabilities: { tools: true, input: ['text', 'image', 'pdf', 'application/json'], output: ['text'] } }],
+    };
+    const stored = storedProviderEntrySchema.parse({
+      canonical: 'openrouter',
+      settings: { baseURL: 'https://llm.example.edu/v1' },
+      models: { sonnet: { name: 'Sonnet' } },
+    });
+    const form = providerToEditFormState(inheriting, stored);
+    const untouched = editAndSave(form)?.models.sonnet;
+    expect(untouched?.name).toBe('Sonnet');
+    expect(untouched).not.toHaveProperty('capabilities');
+
+    const withoutImage = {
+      ...form.models[0],
+      inputCapabilities: form.models[0].inputCapabilities.filter((value) => value !== 'image'),
+      capabilitiesKnown: { ...form.models[0].capabilitiesKnown, input: true },
+    };
+    expect(editAndSave({ ...form, models: [withoutImage] })?.models.sonnet?.capabilities).toEqual({ input: ['text', 'pdf'] });
+
+    const withStoredInput = providerToEditFormState(inheriting, {
+      ...stored,
+      models: { sonnet: { name: 'Sonnet', capabilities: { input: ['text', '  application/json  '] } } },
+    });
+    expect(editAndSave(withStoredInput)?.models.sonnet?.capabilities).toEqual({ input: ['text', '  application/json  '] });
+    expect(editAndSave(providerToEditFormState(inheriting, null))?.models.sonnet?.capabilities?.input).toEqual(['text', 'image', 'pdf']);
+  });
+
+  test('a saved model type loads and saves as it is, image or any other', () => {
+    const stored = storedProviderEntrySchema.parse({
+      name: 'Campus LLM',
+      settings: { baseURL: 'https://llm.example.edu/v1' },
+      models: {
+        flare: { name: 'Flare', type: 'image' },
+        judge: { name: 'Judge', type: 'decision' },
+        fast: { name: 'Fast' },
+      },
+    });
+    const form = providerToEditFormState(live, stored);
+
+    expect(form.models.map((model) => [model.id, model.type])).toEqual([['flare', 'image'], ['judge', 'decision'], ['fast', undefined]]);
+    const models = editAndSave(form)?.models;
+    expect(models?.flare.type).toBe('image');
+    expect(models?.judge.type).toBe('decision');
+    expect(models?.fast?.type).toBeUndefined();
   });
 
   test('a stored model without levels saves without the generated ones', () => {
@@ -597,6 +870,7 @@ describe('edit form from the stored config entry', () => {
 
   test('without a stored entry the live levels stay out of the save', () => {
     const form = providerToEditFormState(live, null);
+    expect(editAndSave(form)?.package).toBe('aisdk:@ai-sdk/openai-compatible');
     expect(editAndSave(form)?.models.fast).toEqual({ modelID: 'fast', name: 'Fast' });
   });
 });

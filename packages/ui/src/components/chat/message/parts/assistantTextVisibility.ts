@@ -1,24 +1,23 @@
 import { commitStreamedText } from '../../lib/streamTextCommit';
+import type { StreamPhase } from '../types';
+
+// external: #3277 Part finalization releases text even while the message waits on a question or permission.
+export const resolveAssistantTextStreaming = (input: {
+    streamPhase: StreamPhase;
+    isFinalized: boolean;
+}): boolean => {
+    if (input.isFinalized) {
+        return false;
+    }
+    return input.streamPhase === 'streaming' || input.streamPhase === 'cooldown';
+};
 
 export const resolveAssistantDisplayText = (input: {
     textContent: string;
     throttledTextContent: string;
     isStreaming: boolean;
 }): string => {
-    // While streaming, reveal whole blocks only: rendering stops at the last
-    // complete line so a shown paragraph never mutates in place. The held
-    // tail lands with the next line break (or the finalize pass).
     return input.isStreaming
         ? commitStreamedText(input.throttledTextContent)
         : input.textContent;
-};
-
-export const shouldRenderAssistantText = (input: {
-    displayTextContent: string;
-    isFinalized: boolean;
-}): boolean => {
-    if (!input.isFinalized && input.displayTextContent.trim().length === 0) {
-        return false;
-    }
-    return input.displayTextContent.trim().length > 0;
 };

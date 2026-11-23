@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createRequestSecurityRuntime } from './request-security.js';
+import { allowsLocalDevOrigins, buildFrameAncestorsPolicy, createRequestSecurityRuntime, isPasswordlessSocketOriginAllowed } from './request-security.js';
 
 const createRuntime = () => createRequestSecurityRuntime({
   readSettingsFromDiskMigrated: async () => ({}),
@@ -116,5 +116,112 @@ describe('request security runtime', () => {
     const runtime = createRuntime();
     const req = { headers: { host: '192.168.0.1:3000', cookie: 'theme=dark; oc_url_token=x' } };
     expect(runtime.getUiSessionTokenFromRequest(req)).toBeNull();
+  });
+
+  test('believes another loopback port only on a development server', async () => {
+    const devPage = { headers: { origin: 'http://127.0.0.1:5180', host: '127.0.0.1:3902' }, socket: {} };
+    expect(await createRuntime().isRequestOriginAllowed(devPage)).toBe(false);
+    const devRuntime = createRequestSecurityRuntime({ readSettingsFromDiskMigrated: async () => ({}), allowLocalDevOrigins: true });
+    expect(await devRuntime.isRequestOriginAllowed(devPage)).toBe(true);
+
+    expect(allowsLocalDevOrigins({})).toBe(false);
+    expect(allowsLocalDevOrigins({ OPENCHAMBER_ALLOW_DEV_ORIGINS: '1' })).toBe(true);
+    expect(allowsLocalDevOrigins({ OPENCHAMBER_ELECTRON_DEV: '1' })).toBe(true);
+  });
+
+  test('without a UI password, refuses a socket a foreign page opens and keeps non-browser clients', async () => {
+    const runtime = createRuntime();
+    const allowed = (headers) => isPasswordlessSocketOriginAllowed({ headers, socket: {} }, runtime.isRequestOriginAllowed);
+
+    // Any website open in the browser can aim at the loopback port.
+    expect(await allowed({ origin: 'https://evil.example.com', host: '127.0.0.1:3000' })).toBe(false);
+    // So can a dev server on another local port.
+    expect(await allowed({ origin: 'http://localhost:5173', host: '127.0.0.1:3000' })).toBe(false);
+    // The app itself, the desktop shell and the relay host's loopback dial pass.
+    expect(await allowed({ origin: 'http://127.0.0.1:3000', host: '127.0.0.1:3000' })).toBe(true);
+    expect(await allowed({ origin: 'openchamber-ui://app', host: '127.0.0.1:3000' })).toBe(true);
+    // A client that is not a page sends no origin.
+    expect(await allowed({ host: '127.0.0.1:3000' })).toBe(true);
+  });
+
+  test('answers every origin check with a promise, on the fast path and the settings path', async () => {
+    const runtime = createRuntime();
+
+    const fastPath = runtime.isRequestOriginAllowed({
+      headers: { origin: 'openchamber-ui://app', host: '192.168.1.130:1202' },
+      socket: {},
+    });
+    expect(fastPath).toBeInstanceOf(Promise);
+    expect(await fastPath).toBe(true);
+
+    const settingsPath = runtime.isRequestOriginAllowed({
+      headers: { origin: 'https://dash.example.com', host: '127.0.0.1:3000' },
+      socket: {},
+    });
+    expect(settingsPath).toBeInstanceOf(Promise);
+    expect(await settingsPath).toBe(false);
+  });
+
+  test('lets only the app, its shells and named embedders frame it', () => {
+    expect(buildFrameAncestorsPolicy()).toBe("frame-ancestors 'self' openchamber-ui://app capacitor://localhost https://localhost");
+    expect(buildFrameAncestorsPolicy({ allowLocalDevOrigins: true })).toContain('http://127.0.0.1:*');
+    expect(buildFrameAncestorsPolicy({ extra: 'https://dash.example.com, *' })).toMatch(/ https:\/\/dash\.example\.com \*$/);
+    // Anything that is not a plain origin stays out of the policy.
+    expect(buildFrameAncestorsPolicy({ extra: "https://a.test; script-src 'unsafe-inline'" })).not.toContain('script-src');
+  });
+
+  test('validates stored origins and preserves candidates when reading settings fails', async () => {
+    const request = { headers: { origin: 'https://public.example', host: 'internal:3000' }, socket: {} };
+    for (const settings of [null, {}, { publicOrigin: 123 }, { publicOrigin: 'invalid' }]) {
+      const runtime = createRequestSecurityRuntime({ readSettingsFromDiskMigrated: async () => settings });
+      expect(await runtime.isRequestOriginAllowed(request)).toBe(false);
+    }
+    const runtime = createRequestSecurityRuntime({
+      readSettingsFromDiskMigrated: async () => ({ publicOrigin: ' https://public.example/path ' }),
+    });
+    expect(await runtime.isRequestOriginAllowed(request)).toBe(true);
+    const failed = createRequestSecurityRuntime({
+      readSettingsFromDiskMigrated: async () => { throw new Error('unreadable'); },
+    });
+    expect(await failed.isRequestOriginAllowed({
+      headers: { origin: 'http://127.0.0.1:3000', host: 'localhost:3000' },
+      socket: {},
+    })).toBe(true);
+  });
+
+  test('keeps header array handling and malformed cookie escapes', async () => {
+    const runtime = createRuntime();
+    expect(await runtime.isRequestOriginAllowed({
+      headers: { origin: 'https://public.example', 'x-forwarded-host': ['public.example', 'other.example'] },
+    })).toBe(true);
+    expect(await runtime.isRequestOriginAllowed({ headers: { origin: ['https://public.example'] } })).toBe(false);
+    const malformed = runtime.isRequestOriginAllowed({
+      headers: { origin: 'https://public.example', 'x-forwarded-host': [] },
+    });
+    expect(malformed).toBeInstanceOf(Promise);
+    await expect(malformed).rejects.toThrow(TypeError);
+    expect(runtime.getUiSessionTokenFromRequest({ headers: { cookie: ['oc_ui_session=value'] } })).toBeNull();
+    expect(runtime.getUiSessionTokenFromRequest({ headers: { cookie: 'oc_ui_session=%bad' } })).toBe('%bad');
+  });
+
+  test('keeps upgrade rejection fallbacks and tolerates socket failures', () => {
+    const runtime = createRuntime();
+    const writes = [];
+    let destroyed = false;
+    const socket = {
+      destroyed: false,
+      write: (value) => writes.push(value),
+      destroy: () => { destroyed = true; },
+    };
+    runtime.rejectWebSocketUpgrade(socket, 503, ' ');
+    expect(writes[0]).toContain('HTTP/1.1 503 Bad Request\r\n');
+    expect(writes[1].toString()).toBe('Bad Request');
+    expect(destroyed).toBe(true);
+    destroyed = false;
+    socket.write = () => { throw new Error('closed'); };
+    runtime.rejectWebSocketUpgrade(socket, 403, 'Denied');
+    expect(destroyed).toBe(true);
+    socket.destroy = () => { throw new Error('closed'); };
+    expect(() => runtime.rejectWebSocketUpgrade(socket, 403, 'Denied')).not.toThrow();
   });
 });

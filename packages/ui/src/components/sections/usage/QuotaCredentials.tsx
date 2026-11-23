@@ -5,30 +5,54 @@ import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
-type ProviderId = 'exe-dev' | 'ollama-cloud' | 'cursor';
+type QuotaCredentialProviderId = 'exe-dev' | 'cursor' | 'zenmux';
+
 type Status = { configured: boolean; secretMasked?: string };
-type CredentialPayload = { usageToken?: string; cookie?: string; accessToken?: string; refreshToken?: string };
+type CredentialPayload = {
+  usageToken?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  platformApiKey?: string;
+};
 const EXE_DEV_TOKEN_COMMAND = `ssh exe.dev "ssh-key generate-api-key --label=openchamber --exp=30d --cmds='billing credits usage'"`;
 
-export const QuotaCredentials: React.FC<{ providerId: ProviderId; providerName: string }> = ({ providerId, providerName }) => {
+export const QuotaCredentials: React.FC<{ providerId: QuotaCredentialProviderId; providerName: string }> = ({ providerId, providerName }) => {
   const { t } = useI18n();
   const [status, setStatus] = React.useState<Status | null>(null);
   const [values, setValues] = React.useState<CredentialPayload>({});
   const [busy, setBusy] = React.useState(false);
+  const [shownProviderId, setShownProviderId] = React.useState(providerId);
+  if (shownProviderId !== providerId) {
+    setShownProviderId(providerId);
+    setStatus(null);
+    setValues({});
+  }
   const route = `/api/quota/credentials/${providerId}`;
-  React.useEffect(() => { void runtimeFetch(route).then(async (response) => {
-    if (!response.ok) throw new Error();
-    const next: Status = await response.json();
-    setStatus(next); setValues({});
-  }).catch(() => setStatus({ configured: false })); }, [route]);
+  const shownRoute = React.useRef(route);
+  const savedCount = React.useRef(0);
+  React.useEffect(() => {
+    shownRoute.current = route;
+    const savedBefore = savedCount.current;
+    let current = true;
+    void runtimeFetch(route).then(async (response) => {
+      if (!response.ok) throw new Error();
+      const next: Status = await response.json();
+      if (current && savedCount.current === savedBefore) setStatus(next);
+    }).catch(() => { if (current) setStatus({ configured: false }); });
+    return () => { current = false; };
+  }, [route]);
   const request = async (path: string, method: string, body?: CredentialPayload) => {
+    const submitted = values;
     setBusy(true);
     try {
       const response = await runtimeFetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.error);
-      if (payload?.configured !== undefined) setStatus(payload);
-      setValues({});
+      savedCount.current += 1;
+      if (shownRoute.current === route) {
+        if (payload?.configured !== undefined) setStatus(payload);
+        setValues((current) => (current === submitted ? {} : current));
+      }
       toast.success(t('settings.providers.page.quotaCredentials.saved', { provider: providerName }));
     } catch (error) { toast.error(error instanceof Error && error.message ? error.message : t('settings.providers.page.openCodeGo.saveFailed')); }
     finally { setBusy(false); }
@@ -41,8 +65,11 @@ export const QuotaCredentials: React.FC<{ providerId: ProviderId; providerName: 
         <p className="typography-meta text-muted-foreground">{t('settings.providers.page.quotaCredentials.exeDevTokenInstructions')}</p>
         <code className="typography-code block whitespace-pre-wrap break-all rounded bg-muted/50 px-2 py-1.5 text-xs text-foreground">{EXE_DEV_TOKEN_COMMAND}</code>
       </div>}
-      {providerId === 'ollama-cloud' && field('cookie', t('settings.providers.page.openCodeGo.authCookie'), 'aid=...; __Secure-session=...')}
+      {providerId === 'zenmux' && (
+        <p className="typography-meta text-muted-foreground">{t('settings.providers.page.quotaCredentials.zenmuxInstructions')}</p>
+      )}
       {providerId === 'exe-dev' && field('usageToken', t('settings.providers.page.quotaCredentials.usageToken'), t('settings.providers.page.quotaCredentials.tokenPlaceholder'))}
+      {providerId === 'zenmux' && field('platformApiKey', t('settings.providers.page.quotaCredentials.platformApiKey'), t('settings.providers.page.quotaCredentials.tokenPlaceholder'))}
       {providerId === 'cursor' && field('accessToken', t('settings.providers.page.quotaCredentials.accessToken'), t('settings.providers.page.quotaCredentials.tokenPlaceholder'))}
       {providerId === 'cursor' && field('refreshToken', t('settings.providers.page.quotaCredentials.refreshToken'), t('settings.providers.page.quotaCredentials.tokenPlaceholder'))}
       <div className="flex flex-wrap gap-2">

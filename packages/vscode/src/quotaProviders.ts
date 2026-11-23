@@ -1,15 +1,32 @@
-import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
+import { z } from 'zod';
+import { OPENCODE_CONFIG_DIR, OPENCODE_DATA_DIR } from './opencodeConfigPaths';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import { fetchOpenCodeGoUsage } from './opencodeGoQuota';
-import { deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
-import { getProviderAuth, readAuthFile } from './opencodeAuth';
+import { fetchOpenCodeGoUsage, isOpenCodeGoKeyRefusal, OPENCODE_GO_KEY_EXPIRED, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
+import { fetchOpenCodeZenUsage, type OpenCodeZenCredential } from '../../web/server/lib/quota/providers/opencode-zen.js';
+import { fetchMistralUsage } from '../../web/server/lib/quota/providers/mistral-billing.js';
+import { deleteLegacyOllamaCloudCredential, deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
+import { readOpenCodeCredentials } from './opencodeAuth';
+import { readConfig } from './opencodeConfig';
+import { isRecord, toProviderEntity } from './opencode-config-v2';
 import { fetchExeDevUsage } from './exeDevQuota';
-import { fetchOllamaUsage } from './ollamaQuota';
+import { refreshGoogleAccessToken } from '../../web/server/lib/quota/providers/google/oauth.js';
+import { readConsoleBudgets, withConsoleBudgets, type ConsoleBudgets } from '../../web/server/lib/quota/console-budgets.js';
+import { antigravityHeaders, warnIfGeminiGroupMissing } from '../../web/server/lib/quota/providers/antigravity/client.js';
+import { miniMaxStatusError } from '../../web/server/lib/quota/providers/minimax-status.js';
+import { readCodexCliLogin, signInEmailOf } from '../../web/server/lib/quota/providers/codex-cli.js';
+import { isUsageTimeout, requestCodexUsage, requestUsageWithDeadline, type UsageResponse } from './usageRequest';
+import { formatCredits } from '../../web/server/lib/quota/utils/formatters.js';
+import { fetchCursorSummaryWindow } from '../../web/server/lib/quota/providers/cursor-summary.js';
 
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
+
+type UsageWindowGiftReset = {
+  recordId: number;
+  expireAt: number;
+  grantType?: string;
+};
 
 type UsageWindow = {
   usedPercent: number | null;
@@ -20,14 +37,19 @@ type UsageWindow = {
   resetAtFormatted: string | null;
   resetAfterFormatted: string | null;
   valueLabel?: string | null;
+  value?: { kind: 'requests'; count: number } | { kind: 'spend'; spent: number | null; limit: number | null };
+  creditsUsed?: number;
+  giftReset?: UsageWindowGiftReset | null;
 };
 
 type ProviderUsage = {
   windows: Record<string, UsageWindow>;
   models?: Record<string, ProviderUsage>;
+  consoleBudgets?: ConsoleBudgets;
 };
 
 type OpenAiUsagePayload = {
+  email?: string;
   rate_limit?: {
     primary_window?: {
       used_percent?: number;
@@ -46,6 +68,7 @@ type OpenAiUsagePayload = {
   };
   spend_control?: {
     individual_limit?: {
+      unit?: string;
       limit?: number | string;
       used?: number | string;
       used_percent?: number | string;
@@ -81,8 +104,6 @@ type ZaiLimit = {
   percentage?: number;
 };
 
-// CREDIT_LIMIT entries carry `usage` (total credits) and `currentValue` (consumed);
-// TOKENS_LIMIT entries only carry a percentage.
 const formatZaiCreditAmount = (value: number): string => {
   if (value < 1000) return value.toLocaleString('en-US');
   return `${Math.round(value / 100) / 10}k`;
@@ -96,10 +117,32 @@ const formatZaiCreditValueLabel = (limit: ZaiLimit): string | null => {
 };
 
 type ZaiPayload = {
+  code?: number | null;
+  msg?: string | null;
+  success?: boolean;
   data?: {
     limits?: ZaiLimit[];
     level?: string;
   };
+};
+
+type ZaiGiftResetRecord = {
+  recordId?: number;
+  expireTime?: string;
+  available?: boolean;
+  grantType?: string;
+};
+
+type ZaiGiftResetPayload = {
+  data?: {
+    fiveHourResets?: ZaiGiftResetRecord[];
+    weekResets?: ZaiGiftResetRecord[];
+  };
+};
+
+type ZaiGiftResetUsePayload = {
+  msg?: string;
+  success?: boolean;
 };
 
 type ZhipuaiLimit = {
@@ -123,8 +166,6 @@ type ZhipuaiPayload = {
   };
 };
 
-// Mirrors the Z.ai credit label (same monitor API family): `usage` is the
-// total, `currentValue` the consumed amount.
 const formatZhipuaiCreditAmount = (value: number): string => {
   if (value < 1000) return value.toLocaleString('en-US');
   return `${Math.round(value / 100) / 10}k`;
@@ -137,8 +178,6 @@ const formatZhipuaiCreditValueLabel = (limit: ZhipuaiLimit): string | null => {
   return `${formatZhipuaiCreditAmount(used)} / ${formatZhipuaiCreditAmount(total)} credits`;
 };
 
-// `percentage` is the used percent; when the API omits it, derive it from
-// currentValue/usage (observed percentages are integers).
 const resolveZhipuaiUsedPercent = (limit: ZhipuaiLimit): number | null => {
   const percentage = toNumber(limit.percentage);
   if (percentage !== null) {
@@ -150,8 +189,6 @@ const resolveZhipuaiUsedPercent = (limit: ZhipuaiLimit): number | null => {
   return Math.round((used / total) * 100);
 };
 
-// bigmodel.cn reports business failures inside HTTP 200 bodies
-// (`{code, msg, success: false}`); a missing envelope is treated as legacy success.
 const zhipuaiEnvelopeError = (payload: ZhipuaiPayload): string | null => {
   const code = payload?.code;
   if (payload?.success !== false && !(code !== undefined && code !== null && code !== 200)) {
@@ -185,6 +222,14 @@ type DeepseekPayload = {
   }>;
 };
 
+type DeepinfraPayload = {
+  checklist?: {
+    stripe_balance?: number | string;
+    recent?: number | string;
+    limit?: number | string | null;
+  } | null;
+};
+
 type NeuralwattPayload = {
   balance?: {
     credits_remaining_usd?: number | string;
@@ -211,7 +256,7 @@ type NeuralwattPayload = {
   };
 };
 
-export type ProviderResult = {
+type ProviderResult = {
   providerId: string;
   providerName: string;
   ok: boolean;
@@ -220,15 +265,11 @@ export type ProviderResult = {
   fetchedAt: number;
   error?: string;
   planLabel?: string | null;
+  accountLabel?: string | null;
 };
 
-const OPENCODE_DATA_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
-
 const XAI_USAGE_ENDPOINT = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
-const XAI_TOKEN_ENDPOINT = 'https://auth.x.ai/oauth2/token';
-const XAI_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
-const XAI_REFRESH_SKEW_MS = 120_000;
-const XAI_DEFAULT_EXPIRES_IN_SECONDS = 3600;
+const XAI_ACCESS_EXPIRY_SKEW_MS = 120_000;
 
 type XaiAuthEntry = Record<string, unknown> & {
   type: 'oauth';
@@ -237,36 +278,26 @@ type XaiAuthEntry = Record<string, unknown> & {
   expires?: unknown;
 };
 
-let xaiRefreshPromise: Promise<XaiAuthEntry> | null = null;
-
-
 const ANTIGRAVITY_ACCOUNTS_PATHS = [
   path.join(OPENCODE_CONFIG_DIR, 'antigravity-accounts.json'),
   path.join(OPENCODE_DATA_DIR, 'antigravity-accounts.json'),
 ];
 
-// OAuth Secret value used to init client
-// Note: It's ok to save this in git because this is an installed application
-// as described here: https://developers.google.com/identity/protocols/oauth2#installed
-// "The process results in a client ID and, in some cases, a client secret,
-// which you embed in the source code of your application. (In this context,
-// the client secret is obviously not treated as a secret.)"
-// ref: https://github.com/opgginc/opencode-bar
-
-const ANTIGRAVITY_GOOGLE_CLIENT_ID =
-  '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
-const ANTIGRAVITY_GOOGLE_CLIENT_SECRET = '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';
-const GEMINI_GOOGLE_CLIENT_ID =
-  '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
-const GEMINI_GOOGLE_CLIENT_SECRET = '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';
 const DEFAULT_PROJECT_ID = 'rising-fact-p41fc';
 const GOOGLE_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const GOOGLE_DAILY_WINDOW_SECONDS = 24 * 60 * 60;
+const GOOGLE_WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 const GOOGLE_PRIMARY_ENDPOINT = 'https://cloudcode-pa.googleapis.com';
 
 const GOOGLE_ENDPOINTS = [
   'https://daily-cloudcode-pa.sandbox.googleapis.com',
   'https://autopush-cloudcode-pa.sandbox.googleapis.com',
+  GOOGLE_PRIMARY_ENDPOINT,
+];
+
+const ANTIGRAVITY_ENDPOINTS = [
+  'https://daily-cloudcode-pa.googleapis.com',
+  'https://daily-cloudcode-pa.sandbox.googleapis.com',
   GOOGLE_PRIMARY_ENDPOINT,
 ];
 
@@ -286,6 +317,10 @@ const resolveGoogleWindow = (sourceId: GoogleAuthSource['sourceId'], resetAt: nu
     const remainingSeconds = typeof resetAt === 'number'
       ? Math.max(0, Math.round((resetAt - Date.now()) / 1000))
       : null;
+
+    if (remainingSeconds !== null && remainingSeconds > 36 * 60 * 60) {
+      return { label: 'weekly', seconds: GOOGLE_WEEKLY_WINDOW_SECONDS } as const;
+    }
 
     if (remainingSeconds !== null && remainingSeconds > 10 * 60 * 60) {
       return { label: 'daily', seconds: GOOGLE_DAILY_WINDOW_SECONDS } as const;
@@ -349,6 +384,9 @@ const asNonEmptyString = (value: unknown): string | null => {
   return trimmed ? trimmed : null;
 };
 
+const ollamaApiKeyFrom = (entry: ReturnType<typeof normalizeAuthEntry>): string | null =>
+  asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
+
 const parseGoogleRefreshToken = (rawRefreshToken: unknown) => {
   const refreshToken = asNonEmptyString(rawRefreshToken);
   if (!refreshToken) {
@@ -386,6 +424,36 @@ const toTimestamp = (value: unknown): number | null => {
   return null;
 };
 
+const CONSOLE_SERVER = 'https://opencode.ai/console';
+const CONSOLE_ORGANIZATION_ID_PATTERN = /^(?:org|wrk)_[A-Za-z0-9]+$/;
+const openCodeGoConsoleCredential = (auth: AuthFile): OpenCodeGoConsoleCredential | null => {
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['opencode']));
+  if (!entry || entry.type !== 'oauth') return null;
+  const accessToken = asNonEmptyString(entry.access);
+  const orgID = asNonEmptyString(entry.orgID);
+  if (!accessToken || entry.server !== CONSOLE_SERVER || !orgID || !CONSOLE_ORGANIZATION_ID_PATTERN.test(orgID)) return null;
+  const expires = toNumber(entry.expires);
+  return { accessToken, orgID, expires, label: asNonEmptyString(entry.label) };
+};
+
+const openCodeGoKey = (auth: AuthFile, integrationID: 'opencode' | 'opencode-go'): OpenCodeGoApiKeyCredential | null => {
+  const entry = normalizeAuthEntry(getAuthEntry(auth, [integrationID]));
+  if (!entry || entry.type === 'oauth') return null;
+  const apiKey = asNonEmptyString(entry.key) ?? asNonEmptyString(entry.token);
+  return apiKey ? { apiKey, consoleKey: integrationID === 'opencode', label: asNonEmptyString(entry.label) } : null;
+};
+
+const openCodeZenCredential = (auth: AuthFile): OpenCodeZenCredential | null => {
+  const consoleCredential = openCodeGoConsoleCredential(auth);
+  if (consoleCredential) {
+    return { accessToken: consoleCredential.accessToken, orgID: consoleCredential.orgID };
+  }
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['opencode']));
+  if (!entry || entry.type === 'oauth') return null;
+  const key = asNonEmptyString(entry.key) ?? asNonEmptyString(entry.token);
+  return key ? { apiKey: key } : null;
+};
+
 const formatResetTime = (timestamp: number) => {
   try {
     const resetDate = new Date(timestamp);
@@ -393,14 +461,12 @@ const formatResetTime = (timestamp: number) => {
     const isToday = resetDate.toDateString() === now.toDateString();
 
     if (isToday) {
-      // Same day: show time only (e.g., "9:56 PM")
       return resetDate.toLocaleTimeString(undefined, {
         hour: 'numeric',
         minute: '2-digit',
       });
     }
 
-    // Different day: show date + weekday + time (e.g., "Feb 2, Sun 9:56 PM")
     return resetDate.toLocaleString(undefined, {
       month: 'short',
       day: 'numeric',
@@ -419,10 +485,10 @@ const calculateResetAfterSeconds = (resetAt: number | null) => {
   return delta < 0 ? 0 : delta;
 };
 
-const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number | null; resetAt: number | null; valueLabel?: string | null }) => {
+const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number | null; resetAt: number | null; valueLabel?: string | null; value?: UsageWindow['value']; creditsUsed?: number }) => {
   const resetAfterSeconds = calculateResetAfterSeconds(data.resetAt);
   const resetFormatted = data.resetAt ? formatResetTime(data.resetAt) : null;
-  return {
+  const window: UsageWindow = {
     usedPercent: data.usedPercent,
     remainingPercent: data.usedPercent !== null ? Math.max(0, 100 - data.usedPercent) : null,
     windowSeconds: data.windowSeconds ?? null,
@@ -431,7 +497,10 @@ const toUsageWindow = (data: { usedPercent: number | null; windowSeconds: number
     resetAtFormatted: resetFormatted,
     resetAfterFormatted: resetFormatted,
     ...(data.valueLabel ? { valueLabel: data.valueLabel } : {}),
-  } satisfies UsageWindow;
+    ...(data.creditsUsed !== undefined ? { creditsUsed: data.creditsUsed } : {}),
+  };
+  if (data.value) window.value = data.value;
+  return window;
 };
 
 const buildResult = (data: {
@@ -442,6 +511,7 @@ const buildResult = (data: {
   usage?: ProviderUsage | null;
   error?: string;
   planLabel?: string | null;
+  accountLabel?: string | null;
 }): ProviderResult => {
   const result: ProviderResult = {
     providerId: data.providerId,
@@ -453,11 +523,12 @@ const buildResult = (data: {
     fetchedAt: Date.now(),
   };
   if (data.planLabel) result.planLabel = data.planLabel;
+  if (data.accountLabel) result.accountLabel = data.accountLabel;
   return result;
 };
 
-const resolveXaiAuth = (): XaiAuthEntry | null => {
-  const entry = getProviderAuth('xai');
+const resolveXaiAuth = (auth: AuthFile): XaiAuthEntry | null => {
+  const entry = auth.xai;
   if (!entry || typeof entry !== 'object' || entry.type !== 'oauth') return null;
 
   const access = asNonEmptyString(entry.access);
@@ -487,81 +558,26 @@ const jwtExpiryMilliseconds = (accessToken: string): number | null => {
   }
 };
 
-const xaiAccessNeedsRefresh = (entry: XaiAuthEntry, now = Date.now()): boolean => {
+const xaiAccessExpired = (entry: XaiAuthEntry, now = Date.now()): boolean => {
   const access = asNonEmptyString(entry.access);
   if (!access) return true;
 
-  const refreshDeadline = now + XAI_REFRESH_SKEW_MS;
+  const expiryDeadline = now + XAI_ACCESS_EXPIRY_SKEW_MS;
   const storedExpiry = Number(entry.expires);
-  if (Number.isFinite(storedExpiry) && storedExpiry <= refreshDeadline) {
+  if (Number.isFinite(storedExpiry) && storedExpiry <= expiryDeadline) {
     return true;
   }
 
   const jwtExpiry = jwtExpiryMilliseconds(access);
-  return jwtExpiry !== null && jwtExpiry <= refreshDeadline;
+  return jwtExpiry !== null && jwtExpiry <= expiryDeadline;
 };
 
-const refreshXaiAuth = (entry: XaiAuthEntry): Promise<XaiAuthEntry> => {
-  if (xaiRefreshPromise) return xaiRefreshPromise;
-
-  const refreshToken = asNonEmptyString(entry.refresh);
-  if (!refreshToken) {
-    return Promise.reject(new Error('xAI OAuth refresh token is unavailable'));
+const requireXaiAccessToken = (entry: XaiAuthEntry): string => {
+  const access = asNonEmptyString(entry.access);
+  if (!access || xaiAccessExpired(entry)) {
+    throw new Error('xAI access token expired — send a Grok message or re-authorize');
   }
-
-  const pending = (async () => {
-    const response = await fetch(XAI_TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: XAI_CLIENT_ID,
-        refresh_token: refreshToken,
-        grant_type: 'refresh_token',
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-    if (!response.ok) {
-      throw new Error(`xAI OAuth refresh failed: ${response.status}`);
-    }
-
-    const responsePayload = payload ?? {};
-    const access = asNonEmptyString(responsePayload.access_token);
-    if (!access) {
-      throw new Error('xAI OAuth refresh returned no access token');
-    }
-
-    const expiresIn = responsePayload.expires_in ?? XAI_DEFAULT_EXPIRES_IN_SECONDS;
-    if (typeof expiresIn !== 'number' || !Number.isFinite(expiresIn)) {
-      throw new Error('xAI OAuth refresh returned an invalid expiry');
-    }
-
-    const refreshed: XaiAuthEntry = {
-      ...entry,
-      type: 'oauth',
-      access,
-      refresh: asNonEmptyString(responsePayload.refresh_token) ?? refreshToken,
-      expires: Date.now() + expiresIn * 1000,
-    };
-
-    // Kept in memory for this process only: OpenCode 2.x owns the credential
-    // store, so writing it back would drift from what OpenCode actually uses.
-    return refreshed;
-  })();
-
-  const settled = pending.finally(() => {
-    if (xaiRefreshPromise === settled) {
-      xaiRefreshPromise = null;
-    }
-  });
-  xaiRefreshPromise = settled;
-  return settled;
-};
-
-const getXaiAccessToken = async (entry: XaiAuthEntry): Promise<string> => {
-  if (!xaiAccessNeedsRefresh(entry)) return entry.access!;
-  return (await refreshXaiAuth(entry)).access!;
+  return access;
 };
 
 type XaiFixed32Field = { path: number[]; value: number; order: number };
@@ -775,19 +791,38 @@ const durationToSeconds = (duration?: number, unit?: string) => {
   return null;
 };
 
-export const listConfiguredQuotaProviders = () => {
-  let auth: AuthFile = {};
-  try {
-    auth = readAuthFile();
-  } catch {
-    // Managed credentials remain enumerable; unreadable auth cannot establish xAI configuration.
+const KIMI_AUTH_ALIASES = ['kimi-code-plan-cn', 'kimi-for-coding', 'kimi', 'kimi-code-plan-global'];
+
+const collectKimiApiKeys = (auth: AuthFile): { apiKey: string; endpoint: string }[] => {
+  const keys: { apiKey: string; endpoint: string }[] = [];
+  const seen = new Set<string>();
+  for (const alias of KIMI_AUTH_ALIASES) {
+    const entry = normalizeAuthEntry(auth[alias] ?? null);
+    const apiKey = asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
+    const endpoint = alias === 'kimi-code-plan-global'
+      ? 'https://api.kimi.ai/coding/v1/usages'
+      : 'https://api.kimi.com/coding/v1/usages';
+    const identity = JSON.stringify([endpoint, apiKey]);
+    if (apiKey && !seen.has(identity)) {
+      seen.add(identity);
+      keys.push({ apiKey, endpoint });
+    }
   }
+  return keys;
+};
+
+export const listConfiguredQuotaProviders = async () => {
+  const auth = await readOpenCodeCredentials();
   const configured = new Set<string>();
-  const openCodeGoAuth = normalizeAuthEntry(getAuthEntry(auth, ['opencode-go']));
-  if (openCodeGoAuth && (typeof openCodeGoAuth.key === 'string' || typeof openCodeGoAuth.token === 'string')) configured.add('opencode-go');
-  if (readCredential('ollama-cloud')) configured.add('ollama-cloud');
+  if (openCodeGoKey(auth, 'opencode-go') || openCodeGoKey(auth, 'opencode') || openCodeGoConsoleCredential(auth)) configured.add('opencode-go');
+  if (openCodeZenCredential(auth)) configured.add('opencode');
   if (readCredential('cursor')) configured.add('cursor');
   if (readCredential('exe-dev')) configured.add('exe-dev');
+
+  const ollamaAuth = normalizeAuthEntry(getAuthEntry(auth, ['ollama-cloud', 'ollamacloud']));
+  if (ollamaApiKeyFrom(ollamaAuth)) {
+    configured.add('ollama-cloud');
+  }
 
   const anthropicAuth = normalizeAuthEntry(getAuthEntry(auth, ['anthropic', 'claude']));
   if (anthropicAuth && ((anthropicAuth as Record<string, unknown>).access || (anthropicAuth as Record<string, unknown>).token)) {
@@ -799,8 +834,11 @@ export const listConfiguredQuotaProviders = () => {
     configured.add('codex');
   }
 
-  if (resolveGeminiCliAuth(auth) || resolveAntigravityAuth()) {
+  if (resolveGeminiCliAuth(auth)) {
     configured.add('google');
+  }
+  if (resolveAntigravityAuth()) {
+    configured.add('antigravity');
   }
 
   const zaiAuth = normalizeAuthEntry(getAuthEntry(auth, ['zai-coding-plan', 'zai', 'z.ai']));
@@ -813,8 +851,7 @@ export const listConfiguredQuotaProviders = () => {
     configured.add('zhipuai-coding-plan');
   }
 
-  const kimiAuth = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi', 'kimi-code-plan-global']));
-  if (kimiAuth && ((kimiAuth as Record<string, unknown>).key || (kimiAuth as Record<string, unknown>).token)) {
+  if (collectKimiApiKeys(auth).length > 0) {
     configured.add('kimi-for-coding');
   }
 
@@ -865,127 +902,150 @@ export const listConfiguredQuotaProviders = () => {
     configured.add('deepseek');
   }
 
+  if (getMistralApiKey(auth)) {
+    configured.add('mistral');
+  }
+
+  const deepinfraAuth = normalizeAuthEntry(getAuthEntry(auth, ['deepinfra', 'deep-infra', 'deep_infra']));
+  if (deepinfraAuth && ((deepinfraAuth as Record<string, unknown>).key || (deepinfraAuth as Record<string, unknown>).token)) {
+    configured.add('deepinfra');
+  }
+
   if (getHyperApiKey(auth)) {
     configured.add('hyper');
   }
 
-  let xaiAuth: XaiAuthEntry | null = null;
-  try {
-    xaiAuth = resolveXaiAuth();
-  } catch {
-    xaiAuth = null;
+  if (asNonEmptyString(readCredential('zenmux')?.platformApiKey)) {
+    configured.add('zenmux');
   }
-  if (xaiAuth) {
+
+  if (getKiloApiKey(auth)) {
+    configured.add('kilo');
+  }
+
+  if (resolveXaiAuth(auth)) {
     configured.add('xai');
   }
 
   return Array.from(configured);
 };
 
+const codexErrorBodySchema = z.object({ error: z.object({ type: z.string() }) });
+
+// SAFETY: every field of the payload is read through toNumber/toTimestamp/asNonEmptyString, so a shape other than the one asserted yields no window rather than a wrong one.
+const codexUsagePayloadOf = (response: UsageResponse) => response.json() as Promise<OpenAiUsagePayload>;
+
+const codexUsageResult = (payload: OpenAiUsagePayload, accountLabel: string | null = null): ProviderResult => buildResult({
+  providerId: 'codex',
+  providerName: 'Codex',
+  ok: true,
+  configured: true,
+  usage: { windows: codexUsageWindowsOf(payload) },
+  accountLabel,
+});
+
+const codexFailure = (error: string, configured = true): ProviderResult => buildResult({
+  providerId: 'codex',
+  providerName: 'Codex',
+  ok: false,
+  configured,
+  error,
+});
+
+const unlessTimedOut = (error: Error): null => {
+  if (isUsageTimeout(error)) throw error;
+  return null;
+};
+
+const codexUsageFromCli = async (): Promise<ProviderResult | null> => {
+  const login = readCodexCliLogin();
+  if (!login) return null;
+  const response = await requestCodexUsage(login.accessToken, login.accountId).catch(unlessTimedOut);
+  if (!response?.ok) return null;
+  const payload = await codexUsagePayloadOf(response);
+  return codexUsageResult(payload, asNonEmptyString(payload?.email) ?? signInEmailOf(login.accessToken));
+};
+
 const fetchCodexQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['openai', 'codex', 'chatgpt'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
   const accountId = entry?.accountId as string | undefined;
 
-  if (!accessToken) {
-    return buildResult({
-      providerId: 'codex',
-      providerName: 'Codex',
-      ok: false,
-      configured: false,
-      error: 'Not configured',
-    });
-  }
+  if (!accessToken) return codexFailure('Not configured', false);
 
   try {
-    const response = await fetch('https://chatgpt.com/backend-api/wham/usage', {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
-      },
-    });
+    const response = await requestCodexUsage(accessToken, accountId);
+    if (response.ok) return codexUsageResult(await codexUsagePayloadOf(response));
+    if (response.status !== 401) return codexFailure(`API error: ${response.status}`);
 
-    if (!response.ok) {
-      return buildResult({
-        providerId: 'codex',
-        providerName: 'Codex',
-        ok: false,
-        configured: true,
-        error: `API error: ${response.status}`,
-      });
+    const body = codexErrorBodySchema.safeParse(await response.json().catch(unlessTimedOut));
+    if (!body.success || body.data.error.type !== 'rejected_by_access_enforcement') {
+      return codexFailure('Session expired \u2014 please re-authenticate with OpenAI');
     }
-
-    const payload = await response.json() as OpenAiUsagePayload;
-    const primary = payload?.rate_limit?.primary_window ?? null;
-    const secondary = payload?.rate_limit?.secondary_window ?? null;
-    const credits = payload?.credits ?? null;
-
-    const windows: Record<string, UsageWindow> = {};
-    if (primary) {
-      const windowSeconds = toNumber(primary.limit_window_seconds);
-      windows[resolveWindowLabel(windowSeconds)] = toUsageWindow({
-        usedPercent: toNumber(primary.used_percent),
-        windowSeconds,
-        resetAt: toTimestamp(primary.reset_at),
-      });
-    }
-    if (secondary) {
-      const windowSeconds = toNumber(secondary.limit_window_seconds);
-      windows[resolveWindowLabel(windowSeconds)] = toUsageWindow({
-        usedPercent: toNumber(secondary.used_percent),
-        windowSeconds,
-        resetAt: toTimestamp(secondary.reset_at),
-      });
-    }
-    if (credits) {
-      const balance = toNumber(credits.balance);
-      const unlimited = Boolean(credits.unlimited);
-      const valueLabel = unlimited
-        ? 'Unlimited'
-        : balance !== null
-          ? `$${formatMoney(balance)}`
-          : null;
-      windows.credits_balance = toUsageWindow({
-        usedPercent: null,
-        windowSeconds: null,
-        resetAt: null,
-        valueLabel,
-      });
-    }
-    if (payload?.spend_control?.individual_limit) {
-      const spendLimit = payload.spend_control.individual_limit;
-      const used = toNumber(spendLimit.used);
-      const limit = toNumber(spendLimit.limit);
-      const valueLabel = used !== null && limit !== null
-        ? `${used.toFixed(0)} / ${limit.toFixed(0)} used`
-        : null;
-      windows.credits = toUsageWindow({
-        usedPercent: toNumber(spendLimit.used_percent),
-        windowSeconds: null,
-        resetAt: null,
-        valueLabel,
-      });
-    }
-
-    return buildResult({
-      providerId: 'codex',
-      providerName: 'Codex',
-      ok: true,
-      configured: true,
-      usage: { windows },
-    });
+    return await codexUsageFromCli()
+      ?? codexFailure('OpenAI shows usage for Sign in with ChatGPT only at chatgpt.com/settings/usage. The legacy Codex sign-ins show it here.');
   } catch (error) {
-    return buildResult({
-      providerId: 'codex',
-      providerName: 'Codex',
-      ok: false,
-      configured: true,
-      error: error instanceof Error ? error.message : 'Request failed',
+    if (isUsageTimeout(error)) return codexFailure('Request timed out');
+    return codexFailure(error instanceof Error ? error.message : 'Request failed');
+  }
+};
+
+const codexUsageWindowsOf = (payload: OpenAiUsagePayload) => {
+  const primary = payload?.rate_limit?.primary_window ?? null;
+  const secondary = payload?.rate_limit?.secondary_window ?? null;
+  const credits = payload?.credits ?? null;
+
+  const windows: Record<string, UsageWindow> = {};
+  if (primary) {
+    const windowSeconds = toNumber(primary.limit_window_seconds);
+    windows[resolveWindowLabel(windowSeconds)] = toUsageWindow({
+      usedPercent: toNumber(primary.used_percent),
+      windowSeconds,
+      resetAt: toTimestamp(primary.reset_at),
     });
   }
+  if (secondary) {
+    const windowSeconds = toNumber(secondary.limit_window_seconds);
+    windows[resolveWindowLabel(windowSeconds)] = toUsageWindow({
+      usedPercent: toNumber(secondary.used_percent),
+      windowSeconds,
+      resetAt: toTimestamp(secondary.reset_at),
+    });
+  }
+  if (credits) {
+    const balance = toNumber(credits.balance);
+    const unlimited = Boolean(credits.unlimited);
+    const valueLabel = unlimited
+      ? 'Unlimited'
+      : balance !== null
+        ? formatCredits(balance)
+        : null;
+    windows.credits_balance = toUsageWindow({
+      usedPercent: null,
+      windowSeconds: null,
+      resetAt: null,
+      valueLabel,
+    });
+  }
+  if (payload?.spend_control?.individual_limit) {
+    const spendLimit = payload.spend_control.individual_limit;
+    const used = toNumber(spendLimit.used);
+    const limit = toNumber(spendLimit.limit);
+    const isUsd = spendLimit.unit === 'usd';
+    const valueLabel = used !== null && limit !== null
+      ? isUsd
+        ? `$${formatMoney(used)} / $${formatMoney(limit)}`
+        : `${used.toFixed(0)} / ${limit.toFixed(0)} used`
+      : null;
+    windows[isUsd ? 'usage' : 'credits'] = toUsageWindow({
+      usedPercent: toNumber(spendLimit.used_percent),
+      windowSeconds: null,
+      resetAt: null,
+      valueLabel,
+    });
+  }
+  return windows;
 };
 
 type GoogleAuthSource = {
@@ -1009,7 +1069,7 @@ const resolveGeminiCliAuth = (auth: AuthFile): GoogleAuthSource | null => {
   const accessToken = asNonEmptyString(oauthObject.access) ?? asNonEmptyString(oauthObject.token);
   const refreshParts = parseGoogleRefreshToken(oauthObject.refresh);
 
-  if (!accessToken && !refreshParts.refreshToken) {
+  if ((oauthObject.methodID !== undefined && !['oauth', 'gemini-cli'].includes(String(oauthObject.methodID))) || (!accessToken && !refreshParts.refreshToken)) {
     return null;
   }
 
@@ -1052,8 +1112,7 @@ const resolveAntigravityAuth = (): GoogleAuthSource | null => {
   return null;
 };
 
-const resolveGoogleAuthSources = (): GoogleAuthSource[] => {
-  const auth = readAuthFile();
+const resolveGoogleAuthSources = (auth: AuthFile): GoogleAuthSource[] => {
   const sources: GoogleAuthSource[] = [];
 
   const geminiAuth = resolveGeminiCliAuth(auth);
@@ -1061,46 +1120,7 @@ const resolveGoogleAuthSources = (): GoogleAuthSource[] => {
     sources.push(geminiAuth);
   }
 
-  const antigravityAuth = resolveAntigravityAuth();
-  if (antigravityAuth) {
-    sources.push(antigravityAuth);
-  }
-
   return sources;
-};
-
-const resolveGoogleOAuthClient = (sourceId: GoogleAuthSource['sourceId']) => {
-  if (sourceId === 'gemini') {
-    return {
-      clientId: GEMINI_GOOGLE_CLIENT_ID,
-      clientSecret: GEMINI_GOOGLE_CLIENT_SECRET,
-    };
-  }
-
-  return {
-    clientId: ANTIGRAVITY_GOOGLE_CLIENT_ID,
-    clientSecret: ANTIGRAVITY_GOOGLE_CLIENT_SECRET,
-  };
-};
-
-const refreshGoogleAccessToken = async (refreshToken: string, clientId: string, clientSecret: string) => {
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    }),
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const data = await response.json() as Record<string, unknown>;
-  return typeof data?.access_token === 'string' ? data.access_token : null;
 };
 
 const fetchGoogleQuotaBuckets = async (accessToken: string, projectId?: string) => {
@@ -1132,10 +1152,15 @@ const fetchGoogleQuotaBuckets = async (accessToken: string, projectId?: string) 
   }
 };
 
-const fetchGoogleModels = async (accessToken: string, projectId?: string) => {
+const fetchGoogleModels = async (
+  accessToken: string,
+  projectId?: string,
+  endpoints: readonly string[] = GOOGLE_ENDPOINTS,
+  clientHeaders: Record<string, string> = GOOGLE_HEADERS,
+) => {
   const body = projectId ? { project: projectId } : {};
 
-  for (const endpoint of GOOGLE_ENDPOINTS) {
+  for (const endpoint of endpoints) {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
     try {
@@ -1144,7 +1169,7 @@ const fetchGoogleModels = async (accessToken: string, projectId?: string) => {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...GOOGLE_HEADERS,
+          ...clientHeaders,
         },
         body: JSON.stringify(body),
         signal: controller?.signal,
@@ -1166,7 +1191,7 @@ const fetchGoogleModels = async (accessToken: string, projectId?: string) => {
 };
 
 const fetchGoogleQuota = async (): Promise<ProviderResult> => {
-  const authSources = resolveGoogleAuthSources();
+  const authSources = resolveGoogleAuthSources(await readOpenCodeCredentials());
   if (!authSources.length) {
     return buildResult({
       providerId: 'google',
@@ -1189,13 +1214,12 @@ const fetchGoogleQuota = async (): Promise<ProviderResult> => {
         sourceErrors.push(`${source.sourceLabel}: Missing refresh token`);
         continue;
       }
-      const { clientId, clientSecret } = resolveGoogleOAuthClient(source.sourceId);
-      accessToken = (await refreshGoogleAccessToken(source.refreshToken, clientId, clientSecret)) ?? undefined;
-    }
-
-    if (!accessToken) {
-      sourceErrors.push(`${source.sourceLabel}: Failed to refresh OAuth token`);
-      continue;
+      const result = await refreshGoogleAccessToken(source.refreshToken, 'gemini', { fallbackToAntigravity: true });
+      if (!result.ok) {
+        sourceErrors.push(`${source.sourceLabel}: Failed to refresh OAuth token`);
+        continue;
+      }
+      accessToken = result.accessToken;
     }
 
     const projectId = source.projectId ?? DEFAULT_PROJECT_ID;
@@ -1293,16 +1317,234 @@ const fetchGoogleQuota = async (): Promise<ProviderResult> => {
   });
 };
 
+type QuotaSummaryBucketPayload = {
+  bucketId?: string;
+  window?: string;
+  remainingFraction?: number;
+  resetTime?: string;
+  displayName?: string;
+};
+
+type QuotaSummaryGroupPayload = {
+  displayName?: string;
+  buckets?: QuotaSummaryBucketPayload[];
+};
+
+type QuotaSummaryPayload = {
+  groups?: QuotaSummaryGroupPayload[];
+};
+
+const fetchAntigravityQuotaSummary = async (accessToken: string, projectId?: string): Promise<QuotaSummaryPayload | null> => {
+  const body = projectId ? { project: projectId } : {};
+
+  for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 15000) : null;
+    try {
+      const response = await fetch(`${endpoint}/v1internal:retrieveUserQuotaSummary`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          ...antigravityHeaders(),
+        },
+        body: JSON.stringify(body),
+        signal: controller?.signal,
+      });
+
+      if (response.ok) {
+        return await response.json() as QuotaSummaryPayload;
+      }
+    } catch {
+      // fall through
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  return null;
+};
+
+const fetchAntigravityQuota = async (): Promise<ProviderResult> => {
+  const auth = resolveAntigravityAuth();
+  if (!auth || !auth.refreshToken) {
+    return buildResult({
+      providerId: 'antigravity',
+      providerName: 'Antigravity',
+      ok: false,
+      configured: false,
+      error: 'Not configured',
+    });
+  }
+
+  const result = await refreshGoogleAccessToken(auth.refreshToken, 'antigravity');
+  const accessToken = result.ok ? result.accessToken : null;
+  if (!accessToken) {
+    return buildResult({
+      providerId: 'antigravity',
+      providerName: 'Antigravity',
+      ok: false,
+      configured: true,
+      error: 'Failed to refresh Antigravity token',
+    });
+  }
+
+  const projectId = auth.projectId ?? DEFAULT_PROJECT_ID;
+
+  const [summaryPayload, rawModelsPayload] = await Promise.all([
+    fetchAntigravityQuotaSummary(accessToken, projectId),
+    fetchGoogleModels(accessToken, projectId, ANTIGRAVITY_ENDPOINTS, antigravityHeaders()),
+  ]);
+
+  warnIfGeminiGroupMissing(summaryPayload);
+
+  const modelGroupWindows: Array<{
+    groupType: 'gemini' | '3p';
+    windows: Record<string, UsageWindow>;
+    bucket5h?: { remainingFraction: number };
+    bucketWeekly?: { remainingFraction: number };
+  }> = [];
+
+  const groups = summaryPayload?.groups ?? [];
+  for (const group of groups) {
+    const groupName = (group.displayName ?? '').toLowerCase();
+    const is3p = groupName.includes('claude') || groupName.includes('gpt') || groupName.includes('3p');
+    const groupType: 'gemini' | '3p' = is3p ? '3p' : 'gemini';
+
+    const windows: Record<string, UsageWindow> = {};
+    let bucket5h: { remainingFraction: number } | undefined;
+    let bucketWeekly: { remainingFraction: number } | undefined;
+
+    for (const b of group.buckets ?? []) {
+      const remainingFraction = toNumber(b.remainingFraction);
+      const remainingPercent = remainingFraction !== null ? Math.round(remainingFraction * 100) : null;
+      const usedPercent = remainingPercent !== null ? Math.max(0, 100 - remainingPercent) : null;
+      const resetAt = toTimestamp(b.resetTime);
+      const windowStr = (b.window ?? b.bucketId ?? '').toLowerCase();
+
+      let label = '5h';
+      let seconds = GOOGLE_FIVE_HOUR_WINDOW_SECONDS;
+
+      if (windowStr.includes('week') || windowStr.includes('7d')) {
+        label = 'weekly';
+        seconds = GOOGLE_WEEKLY_WINDOW_SECONDS;
+        bucketWeekly = { remainingFraction: remainingFraction ?? 1 };
+      } else if (windowStr.includes('day') || windowStr.includes('daily')) {
+        label = 'daily';
+        seconds = GOOGLE_DAILY_WINDOW_SECONDS;
+      } else {
+        label = '5h';
+        seconds = GOOGLE_FIVE_HOUR_WINDOW_SECONDS;
+        bucket5h = { remainingFraction: remainingFraction ?? 1 };
+      }
+
+      windows[label] = toUsageWindow({
+        usedPercent,
+        windowSeconds: seconds,
+        resetAt,
+      });
+    }
+
+    modelGroupWindows.push({
+      groupType,
+      windows,
+      bucket5h,
+      bucketWeekly,
+    });
+  }
+
+  const models: Record<string, ProviderUsage> = {};
+  const rawModels = (rawModelsPayload as GoogleModelsPayload)?.models ?? {};
+
+  for (const [modelName, modelData] of Object.entries(rawModels)) {
+    const name = asNonEmptyString(modelName);
+    if (!name) continue;
+
+    const lowerName = name.toLowerCase();
+    const is3p = lowerName.includes('claude') || lowerName.includes('gpt');
+    const matchedGroup = modelGroupWindows.find((g) => is3p ? g.groupType === '3p' : g.groupType === 'gemini');
+
+    if (matchedGroup && Object.keys(matchedGroup.windows).length > 0) {
+      const isWeeklyConstrained = matchedGroup.bucketWeekly
+        && (matchedGroup.bucketWeekly.remainingFraction <= 0.001
+          || (matchedGroup.bucket5h && matchedGroup.bucketWeekly.remainingFraction < matchedGroup.bucket5h.remainingFraction));
+
+      const reorderedWindows: Record<string, UsageWindow> = {};
+      if (isWeeklyConstrained && matchedGroup.windows.weekly) {
+        reorderedWindows.weekly = matchedGroup.windows.weekly;
+        if (matchedGroup.windows['5h']) {
+          reorderedWindows['5h'] = matchedGroup.windows['5h'];
+        }
+      } else {
+        if (matchedGroup.windows['5h']) {
+          reorderedWindows['5h'] = matchedGroup.windows['5h'];
+        }
+        if (matchedGroup.windows.weekly) {
+          reorderedWindows.weekly = matchedGroup.windows.weekly;
+        }
+      }
+
+      for (const [wLabel, wData] of Object.entries(matchedGroup.windows)) {
+        if (!reorderedWindows[wLabel]) {
+          reorderedWindows[wLabel] = wData;
+        }
+      }
+
+      models[name] = { windows: reorderedWindows };
+    } else {
+      const quotaInfo = modelData?.quotaInfo;
+      const remainingFraction = quotaInfo?.remainingFraction;
+      const remainingPercent = typeof remainingFraction === 'number' ? Math.round(remainingFraction * 100) : null;
+      const usedPercent = remainingPercent !== null ? Math.max(0, 100 - remainingPercent) : null;
+      const resetAt = quotaInfo?.resetTime ? new Date(quotaInfo.resetTime).getTime() : null;
+      const window = resolveGoogleWindow('antigravity', resetAt);
+
+      models[name] = {
+        windows: {
+          [window.label]: toUsageWindow({
+            usedPercent,
+            windowSeconds: window.seconds,
+            resetAt,
+          }),
+        },
+      };
+    }
+  }
+
+  if (!Object.keys(models).length) {
+    return buildResult({
+      providerId: 'antigravity',
+      providerName: 'Antigravity',
+      ok: false,
+      configured: true,
+      error: 'Failed to fetch Antigravity quota',
+    });
+  }
+
+  return buildResult({
+    providerId: 'antigravity',
+    providerName: 'Antigravity',
+    ok: true,
+    configured: true,
+    usage: {
+      windows: {},
+      models: Object.keys(models).length ? models : undefined,
+    },
+  });
+};
+
 const CLAUDE_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 const CLAUDE_MAX_COOLDOWN_MS = 60 * 60 * 1000;
 let claudeCredentialFingerprint: string | null = null;
 let claudeCachedUsage: ProviderUsage | null = null;
 let claudeCooldownUntil = 0;
 
-const claudeCooldownFromResponse = (response: Response): number => {
+const claudeCooldownFromResponse = (response: UsageResponse): number => {
   const raw = response.headers.get('retry-after');
   const seconds = raw ? Number(raw) : Number.NaN;
-  if (Number.isFinite(seconds) && seconds > 0) {
+  if (Number.isFinite(seconds) && seconds >= 0) {
     return Math.min(seconds * 1000, CLAUDE_MAX_COOLDOWN_MS);
   }
   if (raw) {
@@ -1400,7 +1642,7 @@ const buildClaudeUsage = (payload: Record<string, unknown>): ProviderUsage => {
 };
 
 const fetchClaudeQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['anthropic', 'claude'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -1421,10 +1663,20 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
     claudeCachedUsage = null;
     claudeCooldownUntil = 0;
   }
+  const expiresAt = normalizeTimestamp(entry?.expires);
+  if (expiresAt !== null && expiresAt > 0 && expiresAt <= Date.now()) {
+    return buildResult({
+      providerId: 'claude',
+      providerName: 'Claude',
+      ok: false,
+      configured: true,
+      error: 'Claude session expired. Open Claude Code to sign in again.',
+    });
+  }
   if (Date.now() < claudeCooldownUntil) return buildClaudeRateLimitResult();
 
   try {
-    const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
+    const response = await requestUsageWithDeadline('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -1437,13 +1689,23 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
       return buildClaudeRateLimitResult();
     }
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       return buildResult({
         providerId: 'claude',
         providerName: 'Claude',
         ok: false,
         configured: true,
         error: 'Claude session expired. Open Claude Code to sign in again.',
+      });
+    }
+
+    if (response.status === 403) {
+      return buildResult({
+        providerId: 'claude',
+        providerName: 'Claude',
+        ok: false,
+        configured: true,
+        error: 'Anthropic does not let this Claude token read usage. A token from `claude setup-token` cannot; a Claude Code sign-in (`/login`) can.',
       });
     }
 
@@ -1468,40 +1730,91 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
       usage,
     });
   } catch (error) {
+    const timedOut = isUsageTimeout(error);
     return buildResult({
       providerId: 'claude',
       providerName: 'Claude',
       ok: false,
       configured: true,
-      error: error instanceof Error ? error.message : 'Request failed',
+      error: timedOut ? 'Request timed out' : (error instanceof Error ? error.message : 'Request failed'),
     });
   }
 };
 
-const buildCopilotWindows = (payload: Record<string, unknown>) => {
-  const quota = (payload.quota_snapshots as Record<string, unknown>) ?? {};
+type CopilotQuotaSnapshot = {
+  entitlement?: number | string;
+  remaining?: number | string;
+  quota_remaining?: number | string;
+  percent_remaining?: number | string;
+  unlimited?: boolean;
+  credits_used?: number | string;
+  has_quota?: boolean;
+};
+
+type CopilotUserPayload = {
+  access_type_sku?: string;
+  copilot_plan?: string;
+  can_signup_for_limited?: boolean;
+  quota_reset_date?: string | number;
+  quota_snapshots?: {
+    premium_interactions?: CopilotQuotaSnapshot;
+    chat?: CopilotQuotaSnapshot;
+    completions?: CopilotQuotaSnapshot;
+  };
+};
+
+const resolveCopilotPlanLabel = (payload: CopilotUserPayload | null | undefined): string | null => {
+  if (!payload) return null;
+  const sku = asNonEmptyString(payload.access_type_sku);
+  const plan = asNonEmptyString(payload.copilot_plan);
+  const canSignup = Boolean(payload.can_signup_for_limited);
+
+  if (sku === 'free_limited_copilot') return 'Copilot Free';
+  if (sku === 'free_educational_quota') return 'Copilot Student';
+  if (plan === 'individual_edu') return 'Copilot Student';
+  if (plan === 'individual') return 'Copilot Pro';
+  if (plan === 'individual_pro') return 'Copilot Pro+';
+  if (plan === 'individual_max') return 'Copilot Max';
+  if (plan === 'business') return 'Copilot Business';
+  if (plan === 'enterprise') return 'Copilot Enterprise';
+  if (canSignup) return 'Copilot Free';
+  return null;
+};
+
+const buildCopilotWindows = (payload: CopilotUserPayload) => {
+  const quota = payload.quota_snapshots;
   const resetAt = toTimestamp(payload.quota_reset_date);
   const windows: Record<string, UsageWindow> = {};
 
-  // Mirrors the quota semantics of microsoft/vscode-copilot-chat
-  // (CopilotUserQuotaInfo): each snapshot carries entitlement, remaining,
-  // unlimited, and percent_remaining. Unlimited plans report no usable
-  // entitlement; percent_remaining is a server-computed fallback.
-  const addWindow = (label: string, snapshot?: Record<string, unknown>) => {
+  // external: https://github.com/microsoft/vscode-copilot-chat Copilot quota labels use spent entitlement credits and preserve fractional premium interactions.
+  const formatCopilotCredits = (value: number): string => {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded)
+      ? rounded.toLocaleString('en-US')
+      : rounded.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  };
+
+  const addWindow = (label: string, snapshot?: CopilotQuotaSnapshot) => {
     if (!snapshot) return;
 
     if (snapshot.unlimited === true) {
+      const creditsUsed = toNumber(typeof snapshot.credits_used === 'string'
+        ? asNonEmptyString(snapshot.credits_used)
+        : snapshot.credits_used);
+      const showCreditsUsed = snapshot.has_quota !== false && creditsUsed !== null && creditsUsed >= 0;
       windows[label] = toUsageWindow({
         usedPercent: null,
         windowSeconds: null,
         resetAt,
-        valueLabel: 'Unlimited',
+        valueLabel: showCreditsUsed ? null : 'Unlimited',
+        creditsUsed: showCreditsUsed ? creditsUsed : undefined,
       });
       return;
     }
 
     const entitlement = toNumber(snapshot.entitlement);
-    const remaining = toNumber(snapshot.remaining);
+    // external: https://github.com/microsoft/vscode-copilot-chat quota_remaining preserves fractional credits that remaining truncates.
+    const remaining = toNumber(snapshot.quota_remaining) ?? toNumber(snapshot.remaining);
     let usedPercent = entitlement !== null && entitlement > 0 && remaining !== null
       ? Math.min(100, Math.max(0, 100 - (remaining / entitlement) * 100))
       : null;
@@ -1511,9 +1824,14 @@ const buildCopilotWindows = (payload: Record<string, unknown>) => {
         usedPercent = Math.min(100, Math.max(0, 100 - percentRemaining));
       }
     }
-    const valueLabel = entitlement !== null && entitlement > 0 && remaining !== null
-      ? `${remaining.toFixed(0)} / ${entitlement.toFixed(0)} left`
-      : null;
+    const used = entitlement === null || entitlement <= 0
+      ? null
+      : remaining !== null
+        ? Math.max(0, Math.min(entitlement, entitlement - remaining))
+        : null;
+    const valueLabel = used === null || entitlement === null
+      ? null
+      : `${formatCopilotCredits(used)} / ${formatCopilotCredits(entitlement)} used`;
     windows[label] = toUsageWindow({
       usedPercent,
       windowSeconds: null,
@@ -1522,15 +1840,37 @@ const buildCopilotWindows = (payload: Record<string, unknown>) => {
     });
   };
 
-  addWindow('premium_interactions', quota.premium_interactions as Record<string, unknown> | undefined);
+  addWindow('premium_interactions', quota?.premium_interactions);
 
   return windows;
 };
 
+const INVALID_COPILOT_ENTERPRISE_URL = 'Invalid GitHub Copilot Enterprise URL';
+
+const COPILOT_ENTERPRISE_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+const copilotUserUrl = (enterpriseUrl: string | undefined): string => {
+  const host = `${enterpriseUrl ?? ''}`.trim();
+  if (!host) return 'https://api.github.com/copilot_internal/user';
+
+  const url = new URL(host.includes('://') ? host : `https://${host}`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+  if (url.username || url.password || url.port || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+  }
+  if (!COPILOT_ENTERPRISE_HOST.test(url.hostname)) throw new Error(INVALID_COPILOT_ENTERPRISE_URL);
+
+  return `https://api.${url.hostname}/copilot_internal/user`;
+};
+
 const fetchCopilotQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['github-copilot', 'copilot'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
+  // SAFETY: OpenCode stores `enterpriseUrl` on a Copilot credential as a string when the
+  // login targets GitHub Enterprise Server. A value that is not a usable host is refused by
+  // `copilotUserUrl` before any request is made, so it cannot redirect the credential.
+  const enterpriseUrl = entry?.enterpriseUrl as string | undefined;
 
   if (!accessToken) {
     return buildResult({
@@ -1543,7 +1883,7 @@ const fetchCopilotQuota = async (): Promise<ProviderResult> => {
   }
 
   try {
-    const response = await fetch('https://api.github.com/copilot_internal/user', {
+    const response = await fetch(copilotUserUrl(enterpriseUrl), {
       method: 'GET',
       headers: {
         Authorization: `token ${accessToken}`,
@@ -1563,13 +1903,15 @@ const fetchCopilotQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
+    const payload = await response.json() as CopilotUserPayload;
+    const planLabel = resolveCopilotPlanLabel(payload);
     return buildResult({
       providerId: 'github-copilot',
       providerName: 'GitHub Copilot',
       ok: true,
       configured: true,
       usage: { windows: buildCopilotWindows(payload) },
+      planLabel,
     });
   } catch (error) {
     return buildResult({
@@ -1583,9 +1925,13 @@ const fetchCopilotQuota = async (): Promise<ProviderResult> => {
 };
 
 const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['github-copilot', 'copilot'])) as Record<string, unknown> | null;
   const accessToken = (entry?.access as string | undefined) ?? (entry?.token as string | undefined);
+  // SAFETY: OpenCode stores `enterpriseUrl` on a Copilot credential as a string when the
+  // login targets GitHub Enterprise Server. A value that is not a usable host is refused by
+  // `copilotUserUrl` before any request is made, so it cannot redirect the credential.
+  const enterpriseUrl = entry?.enterpriseUrl as string | undefined;
 
   if (!accessToken) {
     return buildResult({
@@ -1598,7 +1944,7 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
   }
 
   try {
-    const response = await fetch('https://api.github.com/copilot_internal/user', {
+    const response = await fetch(copilotUserUrl(enterpriseUrl), {
       method: 'GET',
       headers: {
         Authorization: `token ${accessToken}`,
@@ -1618,13 +1964,15 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
+    const payload = await response.json() as CopilotUserPayload;
+    const planLabel = resolveCopilotPlanLabel(payload);
     return buildResult({
       providerId: 'github-copilot-addon',
       providerName: 'GitHub Copilot Add-on',
       ok: true,
       configured: true,
       usage: { windows: buildCopilotWindows(payload) },
+      planLabel,
     });
   } catch (error) {
     return buildResult({
@@ -1637,9 +1985,6 @@ const fetchCopilotAddonQuota = async (): Promise<ProviderResult> => {
   }
 };
 
-// Kimi's weekly `usage` block reports `used`; its rate-limit `limits[].detail`
-// blocks report `remaining` instead. Neither field is guaranteed present, so
-// derive usedPercent from whichever one the API actually returned.
 const computeKimiUsedPercent = (
   total: number | null,
   used: number | null,
@@ -1655,12 +2000,123 @@ const computeKimiUsedPercent = (
   return null;
 };
 
-const fetchKimiQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, ['kimi-for-coding', 'kimi', 'kimi-code-plan-global'])) as Record<string, unknown> | null;
-  const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
+type KimiRatioWindow = { key: string; label: string; windowSeconds: number | null };
 
-  if (!apiKey) {
+const KIMI_RATIO_WINDOWS: KimiRatioWindow[] = [
+  { key: 'limit_5h', label: '5h', windowSeconds: 5 * 60 * 60 },
+  { key: 'limit_7d', label: 'weekly', windowSeconds: 7 * 24 * 60 * 60 },
+  { key: 'limit_month_total', label: 'monthly', windowSeconds: null },
+];
+
+const toKimiRatioPercent = (entry: Record<string, unknown> | null): number | null => {
+  const ratio = toNumber(entry?.used_ratio);
+  return ratio === null ? null : Math.max(0, Math.min(100, ratio * 100));
+};
+
+const kimiRatioWindows = (usages: Record<string, unknown>) => {
+  const windows: Record<string, UsageWindow> = {};
+  for (const { key, label, windowSeconds } of KIMI_RATIO_WINDOWS) {
+    const entry = asObject(usages[key]);
+    if (!entry) continue;
+    const usedPercent = toKimiRatioPercent(entry);
+    if (usedPercent === null) continue;
+    windows[label] = toUsageWindow({
+      usedPercent,
+      windowSeconds,
+      resetAt: toTimestamp(entry.reset_time),
+    });
+  }
+  return windows;
+};
+
+const kimiLegacyWindows = (payload: Record<string, unknown> | null) => {
+  const windows: Record<string, UsageWindow> = {};
+  const usage = asObject(payload?.usage);
+  if (usage) {
+    windows.weekly = toUsageWindow({
+      usedPercent: computeKimiUsedPercent(toNumber(usage.limit), toNumber(usage.used), toNumber(usage.remaining)),
+      windowSeconds: null,
+      resetAt: toTimestamp(usage.resetTime),
+    });
+  }
+
+  const rawLimits = payload?.limits;
+  const limits = Array.isArray(rawLimits) ? rawLimits : [];
+  for (const raw of limits) {
+    const limit = asObject(raw);
+    const window = asObject(limit?.window);
+    const detail = asObject(limit?.detail);
+    const duration = toNumber(window?.duration) ?? undefined;
+    const timeUnit = asNonEmptyString(window?.timeUnit) ?? undefined;
+    const rawLabel = durationToLabel(duration, timeUnit);
+    const windowSeconds = durationToSeconds(duration, timeUnit);
+    const label = windowSeconds === 5 * 60 * 60 ? `Rate Limit (${rawLabel})` : rawLabel;
+    windows[label] = toUsageWindow({
+      usedPercent: computeKimiUsedPercent(toNumber(detail?.limit), toNumber(detail?.used), toNumber(detail?.remaining)),
+      windowSeconds,
+      resetAt: toTimestamp(detail?.resetTime),
+    });
+  }
+  return windows;
+};
+
+type KimiQuotaDependencies = {
+  readAuth?: () => AuthFile | Promise<AuthFile>;
+  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
+};
+
+const MOONSHOT_BALANCE_URL = 'https://api.moonshot.ai/v1/users/me/balance';
+
+const kimiRequestSignal = (refreshSignal: AbortSignal): AbortSignal => {
+  const controller = new AbortController();
+  for (const signal of [refreshSignal, AbortSignal.timeout(5_000)]) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), {
+      once: true,
+      signal: controller.signal,
+    });
+  }
+  return controller.signal;
+};
+
+type MoonshotBalancePayload = {
+  data?: { available_balance?: number };
+};
+
+const fetchMoonshotBalanceWindows = async (
+  apiKey: string,
+  fetchImpl: (url: string, options: RequestInit) => Promise<Response>,
+  refreshSignal: AbortSignal,
+): Promise<Record<string, UsageWindow> | null> => {
+  try {
+    const response = await fetchImpl(MOONSHOT_BALANCE_URL, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: kimiRequestSignal(refreshSignal),
+    });
+    if (!response.ok) return null;
+    const balance = (await response.json() as MoonshotBalancePayload)?.data?.available_balance;
+    if (typeof balance !== 'number' || !Number.isFinite(balance)) return null;
+    return {
+      credits_balance: toUsageWindow({
+        usedPercent: null,
+        windowSeconds: null,
+        resetAt: null,
+        valueLabel: `$${formatMoney(balance)}`,
+      }),
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const fetchKimiQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: KimiQuotaDependencies = {}): Promise<ProviderResult> => {
+  const apiKeys = collectKimiApiKeys(await readAuth());
+
+  if (apiKeys.length === 0) {
     return buildResult({
       providerId: 'kimi-for-coding',
       providerName: 'Kimi for Coding',
@@ -1671,15 +2127,48 @@ const fetchKimiQuota = async (): Promise<ProviderResult> => {
   }
 
   try {
-    const response = await fetch('https://api.kimi.com/coding/v1/usages', {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const refreshSignal = AbortSignal.timeout(25_000);
+    let firstError: string | null = null;
+    for (const { apiKey, endpoint } of apiKeys) {
+      refreshSignal.throwIfAborted();
+      const response = await fetchImpl(endpoint, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: kimiRequestSignal(refreshSignal),
+      });
 
-    if (!response.ok) {
+      if (response.ok) {
+        const payload = asObject(await response.json());
+        const usages = asObject(payload?.usages);
+        const windows = usages ? kimiRatioWindows(usages) : kimiLegacyWindows(payload);
+
+        return buildResult({
+          providerId: 'kimi-for-coding',
+          providerName: 'Kimi for Coding',
+          ok: true,
+          configured: true,
+          usage: { windows },
+        });
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        const balanceWindows = await fetchMoonshotBalanceWindows(apiKey, fetchImpl, refreshSignal);
+        if (balanceWindows) {
+          return buildResult({
+            providerId: 'kimi-for-coding',
+            providerName: 'Kimi for Coding',
+            ok: true,
+            configured: true,
+            usage: { windows: balanceWindows },
+          });
+        }
+        firstError ??= `API error: ${response.status}`;
+        continue;
+      }
+
       return buildResult({
         providerId: 'kimi-for-coding',
         providerName: 'Kimi for Coding',
@@ -1689,45 +2178,12 @@ const fetchKimiQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
-    const windows: Record<string, UsageWindow> = {};
-    const usage = payload.usage as Record<string, unknown> | undefined;
-    if (usage) {
-      const limit = toNumber(usage.limit);
-      const used = toNumber(usage.used);
-      const remaining = toNumber(usage.remaining);
-      const usedPercent = computeKimiUsedPercent(limit, used, remaining);
-      windows.weekly = toUsageWindow({
-        usedPercent,
-        windowSeconds: null,
-        resetAt: toTimestamp(usage.resetTime),
-      });
-    }
-
-    const limits = Array.isArray(payload.limits) ? payload.limits : [];
-    for (const limit of limits) {
-      const window = (limit as Record<string, unknown>)?.window as Record<string, unknown> | undefined;
-      const detail = (limit as Record<string, unknown>)?.detail as Record<string, unknown> | undefined;
-      const rawLabel = durationToLabel(window?.duration as number | undefined, window?.timeUnit as string | undefined);
-      const windowSeconds = durationToSeconds(window?.duration as number | undefined, window?.timeUnit as string | undefined);
-      const label = windowSeconds === 5 * 60 * 60 ? `Rate Limit (${rawLabel})` : rawLabel;
-      const total = toNumber(detail?.limit);
-      const used = toNumber(detail?.used);
-      const remaining = toNumber(detail?.remaining);
-      const usedPercent = computeKimiUsedPercent(total, used, remaining);
-      windows[label] = toUsageWindow({
-        usedPercent,
-        windowSeconds,
-        resetAt: toTimestamp(detail?.resetTime),
-      });
-    }
-
     return buildResult({
       providerId: 'kimi-for-coding',
       providerName: 'Kimi for Coding',
-      ok: true,
+      ok: false,
       configured: true,
-      usage: { windows },
+      error: firstError ?? 'Request failed',
     });
   } catch (error) {
     return buildResult({
@@ -1746,7 +2202,7 @@ const fetchMiniMaxQuota = async (data: {
   endpoint: string;
   usageFieldsAreRemaining: boolean;
 }): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, [data.providerId])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -1780,15 +2236,14 @@ const fetchMiniMaxQuota = async (data: {
     }
 
     const payload = await response.json() as Record<string, unknown>;
-    const baseResp = asObject(payload.base_resp);
-    const statusCode = toNumber(baseResp?.status_code);
-    if (baseResp && statusCode !== 0) {
+    const statusError = miniMaxStatusError(asObject(payload.base_resp));
+    if (statusError) {
       return buildResult({
         providerId: data.providerId,
         providerName: data.providerName,
         ok: false,
         configured: true,
-        error: asNonEmptyString(baseResp.status_msg) ?? `API error: ${statusCode}`,
+        error: statusError,
       });
     }
 
@@ -1878,16 +2333,89 @@ const fetchMiniMaxCnCodingPlanQuota = () => fetchMiniMaxQuota({
   usageFieldsAreRemaining: true,
 });
 
+const readOllamaCloudApiKey = async (): Promise<string | undefined> => {
+  const entry = normalizeAuthEntry(getAuthEntry(await readOpenCodeCredentials(), ['ollama-cloud', 'ollamacloud']));
+  return ollamaApiKeyFrom(entry) ?? undefined;
+};
+
+const OLLAMA_BALANCE_URL = 'https://ollama.com/api/balance';
+const OLLAMA_ME_URL = 'https://ollama.com/api/me';
+
+const fetchOllamaCloudUsage = async (
+  apiKey: string,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = fetch,
+): Promise<Record<string, UsageWindow>> => {
+  const response = await fetchImpl(OLLAMA_BALANCE_URL, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 401 || response.status === 403) throw new Error('Ollama Cloud authentication failed');
+  if (!response.ok) throw new Error(`Ollama Cloud returned HTTP ${response.status}`);
+
+  const payload = asObject(await response.json());
+  const included = asObject(payload?.included);
+  const allowance = toNumber(included?.allowance_usd);
+  const remaining = toNumber(included?.balance_usd);
+  const windows: Record<string, UsageWindow> = {};
+  if (allowance !== null && allowance > 0 && remaining !== null) {
+    windows.monthly = toUsageWindow({
+      usedPercent: Math.min(100, Math.max(0, ((allowance - remaining) / allowance) * 100)),
+      windowSeconds: null,
+      resetAt: toTimestamp(asObject(included?.period)?.until),
+    });
+  }
+
+  for (const name of ['session', 'weekly'] as const) {
+    const limit = asObject(included?.[name]);
+    const remainingPercent = toNumber(limit?.remaining_percent);
+    if (remainingPercent === null) continue;
+    windows[name] = toUsageWindow({
+      usedPercent: Math.min(100, Math.max(0, 100 - remainingPercent)),
+      windowSeconds: null,
+      resetAt: toTimestamp(limit?.resets_at),
+    });
+  }
+
+  const purchased = toNumber(asObject(payload?.purchased)?.balance_usd);
+  if (purchased !== null && purchased > 0) {
+    windows.purchased_credits = toUsageWindow({
+      usedPercent: null,
+      windowSeconds: null,
+      resetAt: null,
+      valueLabel: `$${formatMoney(purchased)}`,
+    });
+  }
+
+  if (Object.keys(windows).length === 0) throw new Error('Ollama Cloud usage data could not be parsed');
+  return windows;
+};
+
+const fetchOllamaCloudPlan = async (
+  apiKey: string,
+  fetchImpl: (url: string, init: RequestInit) => Promise<Response> = fetch,
+): Promise<string | null> => {
+  const response = await fetchImpl(OLLAMA_ME_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) return null;
+  return asNonEmptyString(asObject(await response.json())?.Plan);
+};
+
 export const fetchOllamaCloudQuota = async ({
-  readCookie = () => readCredential('ollama-cloud')?.cookie,
+  readApiKey,
   fetchImpl = fetch,
 }: {
-  readCookie?: () => string | undefined;
+  readApiKey?: () => string | undefined | Promise<string | undefined>;
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 } = {}): Promise<ProviderResult> => {
-  const cookie = readCookie();
+  deleteLegacyOllamaCloudCredential();
 
-  if (!cookie) {
+  const apiKey = await (readApiKey ?? readOllamaCloudApiKey)();
+
+  if (!apiKey) {
     return buildResult({
       providerId: 'ollama-cloud',
       providerName: 'Ollama Cloud',
@@ -1898,10 +2426,10 @@ export const fetchOllamaCloudQuota = async ({
   }
 
   try {
-    const parsed = await fetchOllamaUsage(cookie, fetchImpl);
-    const windows = Object.fromEntries(Object.entries(parsed).map(([key, value]) => [
-      key, toUsageWindow({ ...value, windowSeconds: null, resetAt: null }),
-    ]));
+    const [windows, plan] = await Promise.all([
+      fetchOllamaCloudUsage(apiKey, fetchImpl),
+      fetchOllamaCloudPlan(apiKey, fetchImpl).catch(() => null),
+    ]);
 
     return buildResult({
       providerId: 'ollama-cloud',
@@ -1909,6 +2437,7 @@ export const fetchOllamaCloudQuota = async ({
       ok: true,
       configured: true,
       usage: { windows },
+      planLabel: plan,
     });
   } catch (error) {
     return buildResult({
@@ -1931,16 +2460,94 @@ const fetchExeDevQuota = async (): Promise<ProviderResult> => {
   }
 };
 
+const CURSOR_BASE_URL = 'https://api2.cursor.sh';
+
+const fetchCursorConnect = async (path: string, accessToken: string, body: Record<string, unknown> | null): Promise<Record<string, unknown>> => {
+  const response = await fetch(`${CURSOR_BASE_URL}/${path}`, body === null
+    ? { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(15_000) }
+    : { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(response.status === 401 ? 'Cursor session expired' : `API error: ${response.status}`);
+  return response.json() as Promise<Record<string, unknown>>;
+};
+
+const cursorRequestUsage = (authUsage: unknown): { used: number; limit: number } | null => {
+  let best: { used: number; limit: number } | null = null;
+  for (const [key, entry] of Object.entries((authUsage ?? {}) as Record<string, Record<string, unknown>>)) {
+    if (key === 'startOfMonth' || !entry) continue;
+    const used = toNumber(entry.numRequests);
+    const limit = toNumber(entry.maxRequestUsage);
+    if (used === null || !limit) continue;
+    if (!best || limit > best.limit) best = { used, limit };
+  }
+  return best;
+};
+
+const cursorTeamMemberSpend = (teamSpend: unknown, userId: unknown): Record<string, unknown> | null => {
+  const id = toNumber(userId);
+  const members = (teamSpend as Record<string, unknown> | null | undefined)?.teamMemberSpend;
+  if (id === null || !Array.isArray(members)) return null;
+  return (members as Array<Record<string, unknown>>).find((member) => toNumber(member?.userId) === id) ?? null;
+};
+
+const cursorCreditsWindow = (credits: Record<string, unknown> | null): UsageWindow | null => {
+  const balance = toNumber(credits?.balanceCents ?? credits?.totalBalanceCents ?? credits?.amountCents);
+  return balance === null ? null : toUsageWindow({ usedPercent: null, windowSeconds: null, resetAt: null, valueLabel: `$${formatMoney(balance / 100)}` });
+};
+
+const cursorEnterpriseWindows = (usage: Record<string, unknown> | null, plan: Record<string, unknown> | null, authUsage: Record<string, unknown> | null, hardLimit: Record<string, unknown> | null, memberSpend: Record<string, unknown> | null): Record<string, UsageWindow> => {
+  const resetAt = toTimestamp((plan?.planInfo as Record<string, unknown> | undefined)?.billingCycleEnd ?? usage?.billingCycleEnd);
+  const windowSeconds = resetAt ? Math.max(0, Math.floor((resetAt - Date.now()) / 1000)) : null;
+  const windows: Record<string, UsageWindow> = {};
+  const requestUsage = cursorRequestUsage(authUsage);
+  if (requestUsage) {
+    windows.billing_cycle = toUsageWindow({ usedPercent: Math.min(100, Math.max(0, (requestUsage.used / requestUsage.limit) * 100)), windowSeconds, resetAt, valueLabel: `${Math.round(requestUsage.used)} / ${Math.round(requestUsage.limit)}` });
+  }
+  const limitDollars = toNumber(hardLimit?.hardLimitPerUser);
+  const usedCents = toNumber(memberSpend?.spendCents);
+  if (limitDollars !== null && limitDollars > 0 && usedCents !== null) {
+    windows.on_demand = toUsageWindow({ usedPercent: Math.min(100, Math.max(0, (usedCents / (limitDollars * 100)) * 100)), windowSeconds, resetAt, valueLabel: `$${formatMoney(usedCents / 100)} / $${formatMoney(limitDollars)}` });
+  }
+  return windows;
+};
+
 const fetchCursorQuota = async (): Promise<ProviderResult> => {
   const accessToken = readCredential('cursor')?.accessToken;
   if (!accessToken) return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: false, configured: false, error: 'Not configured' });
   try {
-    const response = await fetch('https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' }, body: '{}', signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) throw new Error(response.status === 401 ? 'Cursor session expired' : `API error: ${response.status}`);
-    const payload = await response.json() as Record<string, unknown>;
-    const plan = (payload.planUsage as Record<string, unknown> | undefined) ?? {};
-    const usedPercent = toNumber(plan.totalPercentUsed);
-    return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: true, configured: true, usage: { windows: { billing_cycle: toUsageWindow({ usedPercent, windowSeconds: null, resetAt: toTimestamp(payload.billingCycleEnd) }) } } });
+    const post = (path: string, body: Record<string, unknown> = {}) => fetchCursorConnect(path, accessToken, body);
+    const get = (path: string) => fetchCursorConnect(path, accessToken, null);
+    const [usage, plan, credits] = await Promise.all([
+      post('aiserver.v1.DashboardService/GetCurrentPeriodUsage'),
+      post('aiserver.v1.DashboardService/GetPlanInfo').catch(() => null),
+      post('aiserver.v1.DashboardService/GetCreditGrantsBalance').catch(() => null),
+    ]);
+    if (usage?.enabled === false) return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: false, configured: true, error: 'No active Cursor subscription' });
+    if (!usage?.planUsage) {
+      const profile = await get('auth/full_stripe_profile').catch(() => null);
+      const teamId = profile?.teamId ? String(profile.teamId) : null;
+      const teamBody = teamId ? { teamId } : {};
+      const [authUsage, hardLimit, teamSpend, me] = await Promise.all([
+        get('auth/usage').catch(() => null),
+        post('aiserver.v1.DashboardService/GetHardLimit', teamBody).catch(() => null),
+        teamId ? post('aiserver.v1.DashboardService/GetTeamSpend', teamBody).catch(() => null) : null,
+        post('aiserver.v1.DashboardService/GetMe').catch(() => null),
+      ]);
+      const windows = cursorEnterpriseWindows(usage, plan, authUsage, hardLimit, cursorTeamMemberSpend(teamSpend, me?.userId));
+      if (!windows.billing_cycle) {
+        const summaryWindow = await fetchCursorSummaryWindow(accessToken).catch(() => null);
+        if (summaryWindow) windows.billing_cycle = summaryWindow;
+      }
+      if (!windows.billing_cycle && !windows.on_demand) {
+        return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: false, configured: true, error: 'No active Cursor subscription' });
+      }
+      const creditWindow = cursorCreditsWindow(credits);
+      if (creditWindow) windows.credits = creditWindow;
+      const planName = (plan?.planInfo as Record<string, unknown> | undefined)?.planName;
+      return buildResult({ providerId: 'cursor', providerName: planName ? `Cursor ${String(planName)}` : 'Cursor', ok: true, configured: true, usage: { windows } });
+    }
+    const planUsage = (usage.planUsage as Record<string, unknown> | undefined) ?? {};
+    const usedPercent = toNumber(planUsage.totalPercentUsed);
+    return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: true, configured: true, usage: { windows: { billing_cycle: toUsageWindow({ usedPercent, windowSeconds: null, resetAt: toTimestamp(usage.billingCycleEnd) }) } } });
   } catch (error) { return buildResult({ providerId: 'cursor', providerName: 'Cursor', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' }); }
 };
 
@@ -1966,8 +2573,28 @@ const isOpenRouterPeriod = (value: unknown): value is OpenRouterPeriod => (
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(PERIOD_SECONDS, value)
 );
 
+const openRouterSpendWindow = (spent: number | null) => toUsageWindow({ usedPercent: null, windowSeconds: null, resetAt: null, value: { kind: 'spend', spent, limit: null } });
+
+const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
+
+const resolveOpenRouterConfigBase = (): string | null => {
+  try {
+    const config = readConfig();
+    const readBaseURL = (sectionKey: 'providers' | 'provider'): string | null => {
+      const section = config[sectionKey];
+      return isRecord(section) ? asNonEmptyString(toProviderEntity(section.openrouter).settings?.baseURL) : null;
+    };
+    const base = (
+      readBaseURL('providers') ?? readBaseURL('provider')
+    )?.replace(/\/+$/, '');
+    return base || null;
+  } catch {
+    return null;
+  }
+};
+
 const fetchOpenRouterQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['openrouter'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -1984,7 +2611,7 @@ const fetchOpenRouterQuota = async (): Promise<ProviderResult> => {
   const timeoutSignal = AbortSignal.timeout(15_000);
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/key', {
+    const response = await fetch(`${resolveOpenRouterConfigBase() ?? OPENROUTER_API_BASE}/key`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -2028,74 +2655,64 @@ const fetchOpenRouterQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const limit = toNumber(data.limit);
-    const limitRemaining = toNumber(data.limit_remaining);
-    if (limit !== null && limitRemaining === null) {
-      return buildResult({
-        providerId: 'openrouter',
-        providerName: 'OpenRouter',
-        ok: false,
-        configured: true,
-        error: 'No quota data in response',
-      });
-    }
+    const toAmount = (value: unknown) => (String(value).trim() === '' ? null : toNumber(value));
+    const toSpendAmount = (value: unknown) => {
+      const amount = toAmount(value);
+      return amount !== null && amount >= 0 ? amount : null;
+    };
+    const limit = toAmount(data.limit);
+    const limitRemaining = toAmount(data.limit_remaining);
+    const usageMonthly = toSpendAmount(data.usage_monthly);
+    const byokMonthly = toSpendAmount(data.byok_usage_monthly);
 
-    const usageMonthly = toNumber(data.usage_monthly);
-    if (limit === null && usageMonthly === null) {
-      return buildResult({
-        providerId: 'openrouter',
-        providerName: 'OpenRouter',
-        ok: false,
-        configured: true,
-        error: 'No quota data in response',
-      });
+    if ((limit === null || limitRemaining === null) && usageMonthly === null && byokMonthly === null) {
+      return buildResult({ providerId: 'openrouter', providerName: 'OpenRouter', ok: false, configured: true, error: 'No quota data in response' });
     }
 
     const nowMs = Date.now();
-    let windowKey: string;
-    let windowSeconds: number | null;
-    let resetAt: number | null;
-    let usedPercent: number | null;
-    let valueLabel: string;
+    const windows: Record<string, ReturnType<typeof toUsageWindow>> = {};
 
-    if (limit === null) {
-      windowKey = 'monthly';
-      windowSeconds = PERIOD_SECONDS.monthly;
-      resetAt = openRouterResetAt('monthly', nowMs);
-      usedPercent = null;
-      valueLabel = `$${formatMoney(usageMonthly)} spent`;
-    } else {
-      const used = Math.max(0, limit - (limitRemaining ?? 0));
-      const percent = limit > 0 ? (used / limit) * 100 : null;
-      usedPercent = percent === null ? null : Math.min(100, percent);
-      valueLabel = `$${formatMoney(used)} / $${formatMoney(limit)}`;
+    if (limit !== null && (limitRemaining !== null || limit > 0)) {
+      let windowKey: string;
+      let windowSeconds: number | null;
+      let resetAt: number | null;
 
       if (isOpenRouterPeriod(data.limit_reset)) {
         windowKey = data.limit_reset;
         windowSeconds = PERIOD_SECONDS[data.limit_reset];
         resetAt = openRouterResetAt(data.limit_reset, nowMs);
       } else {
-        windowKey = 'credits';
+        windowKey = 'key_limit';
         windowSeconds = null;
         resetAt = null;
       }
+
+      const used = limitRemaining === null ? null : Math.max(0, limit - limitRemaining);
+      const percent = used !== null && limit > 0 ? Math.min(100, (used / limit) * 100) : null;
+      windows[windowKey] = toUsageWindow(used === null
+        ? { usedPercent: null, windowSeconds, resetAt, value: { kind: 'spend', spent: null, limit } }
+        : { usedPercent: percent, windowSeconds, resetAt, valueLabel: `$${formatMoney(used)} / $${formatMoney(limit)}` });
     }
+
+    windows.monthly_total = toUsageWindow({
+      usedPercent: null,
+      windowSeconds: PERIOD_SECONDS.monthly,
+      resetAt: openRouterResetAt('monthly', nowMs),
+      value: {
+        kind: 'spend',
+        spent: usageMonthly !== null && byokMonthly !== null ? usageMonthly + byokMonthly : null,
+        limit: null,
+      },
+    });
+    if (usageMonthly !== 0) windows.monthly_credits = openRouterSpendWindow(usageMonthly);
+    if (byokMonthly !== 0) windows.monthly_byok = openRouterSpendWindow(byokMonthly);
 
     return buildResult({
       providerId: 'openrouter',
       providerName: 'OpenRouter',
       ok: true,
       configured: true,
-      usage: {
-        windows: {
-          [windowKey]: toUsageWindow({
-            usedPercent,
-            windowSeconds,
-            resetAt,
-            valueLabel,
-          }),
-        },
-      },
+      usage: { windows },
     });
   } catch (error) {
     const isTimeout = error instanceof DOMException && (error.name === 'TimeoutError' || (error.name === 'AbortError' && timeoutSignal.aborted));
@@ -2139,9 +2756,73 @@ const resolveWindowLabel = (windowSeconds: number | null) => {
   return `${windowSeconds}s`;
 };
 
+const ZAI_RESET_TIME_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const ZAI_ALIASES = ['zai-coding-plan', 'zai', 'z.ai'];
+
+const parseZaiResetExpire = (value: string | undefined): number | null => {
+  if (value === undefined || !ZAI_RESET_TIME_PATTERN.test(value)) return null;
+  const timestamp = Date.parse(`${value.replace(' ', 'T')}+08:00`);
+  return Number.isNaN(timestamp) ? null : timestamp;
+};
+
+const pickZaiGiftReset = (records: ZaiGiftResetRecord[] | undefined): UsageWindowGiftReset | null => {
+  if (!Array.isArray(records)) return null;
+  const now = Date.now();
+  let best: UsageWindowGiftReset | null = null;
+  for (const record of records) {
+    if (!record || record.available !== true) continue;
+    if (record.recordId === undefined) continue;
+    const expireAt = parseZaiResetExpire(record.expireTime);
+    if (expireAt === null || expireAt <= now) continue;
+    if (best === null || expireAt < best.expireAt) {
+      best = { recordId: record.recordId, expireAt };
+      const grantType = asNonEmptyString(record.grantType);
+      if (grantType) {
+        best.grantType = grantType;
+      }
+    }
+  }
+  return best;
+};
+
+const ZAI_GIFT_RESET_URL = 'https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL';
+const ZAI_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
+const ZAI_WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+
+const attachZaiGiftResets = async (windows: Record<string, UsageWindow>, apiKey: string): Promise<void> => {
+  try {
+    const response = await fetch(ZAI_GIFT_RESET_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) return;
+    // SAFETY: response.json() is untyped; only the two record arrays are consumed,
+    // and every field they carry is re-checked by pickZaiGiftReset before use.
+    const payload = await response.json() as ZaiGiftResetPayload;
+    const data = payload?.data;
+    if (!data) return;
+
+    const fiveHour = pickZaiGiftReset(data.fiveHourResets);
+    const weekly = pickZaiGiftReset(data.weekResets);
+
+    for (const window of Object.values(windows)) {
+      if (window.windowSeconds === ZAI_FIVE_HOUR_WINDOW_SECONDS && fiveHour) {
+        window.giftReset = fiveHour;
+      } else if (window.windowSeconds === ZAI_WEEK_WINDOW_SECONDS && weekly) {
+        window.giftReset = weekly;
+      }
+    }
+  } catch {
+    // Gift resets are optional metadata; ignore failures.
+  }
+};
+
 const fetchZaiQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
-  const entry = normalizeAuthEntry(getAuthEntry(auth, ['zai-coding-plan', 'zai', 'z.ai'])) as Record<string, unknown> | null;
+  const auth = await readOpenCodeCredentials();
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ZAI_ALIASES)) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
   if (!apiKey) {
@@ -2174,10 +2855,12 @@ const fetchZaiQuota = async (): Promise<ProviderResult> => {
     }
 
     const payload = await response.json() as ZaiPayload;
+    const failure = zhipuaiEnvelopeError(payload);
+    if (failure) {
+      return buildResult({ providerId: 'zai-coding-plan', providerName: 'z.ai', ok: false, configured: true, error: failure });
+    }
     const limits = Array.isArray(payload?.data?.limits) ? payload.data.limits : [];
     const windows: Record<string, UsageWindow> = {};
-    // The API renamed TOKENS_LIMIT to CREDIT_LIMIT; field semantics stayed the same,
-    // so both limit types map to the same windows.
     for (const limit of limits.filter((entry) => entry?.type === 'TOKENS_LIMIT' || entry?.type === 'CREDIT_LIMIT')) {
       const windowSeconds = resolveWindowSeconds(limit as Record<string, unknown>);
       const windowLabel = resolveWindowLabel(windowSeconds);
@@ -2201,6 +2884,8 @@ const fetchZaiQuota = async (): Promise<ProviderResult> => {
       });
     }
 
+    await attachZaiGiftResets(windows, apiKey);
+
     return buildResult({
       providerId: 'zai-coding-plan',
       providerName: 'z.ai',
@@ -2220,8 +2905,65 @@ const fetchZaiQuota = async (): Promise<ProviderResult> => {
   }
 };
 
+const ZAI_GIFT_RESET_USE_URL = 'https://api.z.ai/api/biz/customer-package-reset/use';
+const ZAI_GIFT_RESET_TYPES = ['FIVE_HOUR', 'WEEK'] as const;
+
+export type QuotaGiftResetType = (typeof ZAI_GIFT_RESET_TYPES)[number];
+
+const activateZaiGiftReset = async (input: { recordId: number; resetType: QuotaGiftResetType; grantType?: string }): Promise<void> => {
+  const auth = await readOpenCodeCredentials();
+  // SAFETY: auth.json is untyped storage; the cast only reads the optional
+  // key/token fields and no other shape is consumed.
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ZAI_ALIASES)) as { key?: unknown; token?: unknown } | null;
+  // SAFETY: a non-string key/token becomes an unusable bearer that the
+  // !apiKey check rejects before any request leaves the host.
+  const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
+
+  if (!apiKey) {
+    throw new Error('Not configured');
+  }
+  const grantType = asNonEmptyString(input.grantType);
+  if (!Number.isFinite(input.recordId)
+    || !ZAI_GIFT_RESET_TYPES.includes(input.resetType)
+    || (input.grantType !== undefined && grantType === null)) {
+    throw new Error('Invalid gift reset request');
+  }
+
+  const response = await fetch(ZAI_GIFT_RESET_USE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      targetType: 'PERSONAL',
+      resetType: input.resetType,
+      recordId: input.recordId,
+      requestId: crypto.randomUUID(),
+      grantType: grantType ?? 'GLOBAL',
+    }),
+  });
+
+  // SAFETY: response.json() is untyped; only success/msg are consumed and both
+  // are re-checked before use.
+  const payload = await response.json().catch(() => null) as ZaiGiftResetUsePayload | null;
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(payload?.msg || `API error: ${response.status}`);
+  }
+};
+
+export const activateQuotaGiftReset = async (
+  providerId: string,
+  input: { recordId: number; resetType: QuotaGiftResetType; grantType?: string },
+): Promise<void> => {
+  if (!ZAI_ALIASES.includes(providerId)) {
+    throw new Error('Unsupported provider');
+  }
+  await activateZaiGiftReset(input);
+};
+
 const fetchZhipuaiCodingPlanQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['zhipuai-coding-plan'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -2271,9 +3013,6 @@ const fetchZhipuaiCodingPlanQuota = async (): Promise<ProviderResult> => {
 
     const windows: Record<string, UsageWindow> = {};
 
-    // The API renamed TOKENS_LIMIT to CREDIT_LIMIT; field semantics stayed the
-    // same, so both limit types map to the same windows. Unit 3 marks hourly
-    // blocks (5h), unit 6 weekly.
     for (const limit of limits.filter((entry) => entry?.type === 'TOKENS_LIMIT' || entry?.type === 'CREDIT_LIMIT')) {
       const windowSeconds = resolveWindowSeconds(limit as Record<string, unknown>);
       const windowLabel = resolveWindowLabel(windowSeconds);
@@ -2287,10 +3026,8 @@ const fetchZhipuaiCodingPlanQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    // Handle TIME_LIMIT (MCP tools monthly window)
     const mcpToolsTimeLimit = limits.find((limit) => limit?.type === 'TIME_LIMIT');
     if (mcpToolsTimeLimit) {
-      // TIME_LIMIT unit=5 means 1 month (30 days)
       const monthSeconds = 30 * 24 * 60 * 60;
       const resetAt = mcpToolsTimeLimit?.nextResetTime ? normalizeTimestamp(mcpToolsTimeLimit.nextResetTime) : null;
       const usedPercent = typeof mcpToolsTimeLimit?.percentage === 'number' ? mcpToolsTimeLimit.percentage : null;
@@ -2321,10 +3058,35 @@ const fetchZhipuaiCodingPlanQuota = async (): Promise<ProviderResult> => {
   }
 };
 
+const nanoGptQuotaWindowSchema = z.object({
+  percentUsed: z.number().nullish(),
+  used: z.union([z.number(), z.string()]).nullish(),
+  limit: z.union([z.number(), z.string()]).nullish(),
+  limits: z.object({
+    daily: z.union([z.number(), z.string()]).nullish(),
+    monthly: z.union([z.number(), z.string()]).nullish(),
+  }).nullish(),
+  resetAt: z.union([z.number(), z.string()]).nullish(),
+  degraded: z.boolean().optional(),
+}).nullish();
+
+const nanoGptUsageSchema = z.object({
+  state: z.string().nullish(),
+  period: z.object({ currentPeriodEnd: z.union([z.number(), z.string()]).nullish() }).nullish(),
+  limits: z.object({
+    dailyInputTokens: z.number().nullish(),
+    weeklyInputTokens: z.number().nullish(),
+  }).nullish(),
+  dailyInputTokens: nanoGptQuotaWindowSchema,
+  weeklyInputTokens: nanoGptQuotaWindowSchema,
+  daily: nanoGptQuotaWindowSchema,
+  monthly: nanoGptQuotaWindowSchema,
+});
+
 const NANO_GPT_DAILY_WINDOW_SECONDS = 86400;
 
 const fetchNanoGptQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['nano-gpt', 'nanogpt', 'nano_gpt'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -2357,54 +3119,54 @@ const fetchNanoGptQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const payload = await response.json() as Record<string, unknown>;
-    const windows: Record<string, UsageWindow> = {};
-    const period = payload.period as Record<string, unknown> | undefined;
-    const daily = payload.daily as Record<string, unknown> | undefined;
-    const monthly = payload.monthly as Record<string, unknown> | undefined;
-    const state = (payload.state as string) ?? 'active';
-
-    if (daily) {
-      let usedPercent: number | null = null;
-      const percentUsed = daily.percentUsed as number | undefined;
-      if (typeof percentUsed === 'number') {
-        usedPercent = Math.max(0, Math.min(100, percentUsed * 100));
-      } else {
-        const used = toNumber(daily.used);
-        const limit = toNumber((daily.limit as number | undefined) ?? (daily.limits as Record<string, unknown>)?.daily);
-        if (used !== null && limit !== null && limit > 0) {
-          usedPercent = Math.max(0, Math.min(100, (used / limit) * 100));
-        }
-      }
-      const resetAt = toTimestamp(daily.resetAt);
-      const valueLabel = state !== 'active' ? `(${state})` : null;
-      windows['daily'] = toUsageWindow({
-        usedPercent,
+    const payload = nanoGptUsageSchema.parse(await response.json());
+    const windows: ProviderUsage['windows'] = {};
+    const state = payload.state ?? 'active';
+    const daily = payload.dailyInputTokens !== undefined ? payload.dailyInputTokens : payload.daily;
+    const quotas = [
+      {
+        name: 'daily',
+        quota: daily,
+        limit: payload.dailyInputTokens !== undefined
+          ? payload.limits?.dailyInputTokens
+          : daily?.limit ?? daily?.limits?.daily,
         windowSeconds: NANO_GPT_DAILY_WINDOW_SECONDS,
-        resetAt,
-        valueLabel,
-      });
-    }
+        resetAt: daily?.resetAt,
+      },
+      {
+        name: 'weekly',
+        quota: payload.weeklyInputTokens,
+        limit: payload.limits?.weeklyInputTokens,
+        windowSeconds: 7 * NANO_GPT_DAILY_WINDOW_SECONDS,
+        resetAt: payload.weeklyInputTokens?.resetAt,
+      },
+      {
+        name: 'monthly',
+        quota: payload.monthly,
+        limit: payload.monthly?.limit ?? payload.monthly?.limits?.monthly,
+        windowSeconds: null,
+        resetAt: payload.monthly?.resetAt ?? payload.period?.currentPeriodEnd,
+      },
+    ];
 
-    if (monthly) {
+    for (const { name, quota, limit: rawLimit, windowSeconds, resetAt } of quotas) {
+      if (!quota) continue;
+      const percentUsed = toNumber(quota.percentUsed);
+      const used = toNumber(quota.used);
+      const limit = toNumber(rawLimit);
       let usedPercent: number | null = null;
-      const percentUsed = monthly.percentUsed as number | undefined;
-      if (typeof percentUsed === 'number') {
-        usedPercent = Math.max(0, Math.min(100, percentUsed * 100));
-      } else {
-        const used = toNumber(monthly.used);
-        const limit = toNumber((monthly.limit as number | undefined) ?? (monthly.limits as Record<string, unknown>)?.monthly);
-        if (used !== null && limit !== null && limit > 0) {
+      if (!quota.degraded) {
+        if (percentUsed !== null) {
+          usedPercent = Math.max(0, Math.min(100, percentUsed * 100));
+        } else if (used !== null && limit !== null && limit > 0) {
           usedPercent = Math.max(0, Math.min(100, (used / limit) * 100));
         }
       }
-      const resetAt = toTimestamp((monthly.resetAt as string | number | undefined) ?? (period as Record<string, unknown>)?.currentPeriodEnd);
-      const valueLabel = state !== 'active' ? `(${state})` : null;
-      windows['monthly'] = toUsageWindow({
+      windows[name] = toUsageWindow({
         usedPercent,
-        windowSeconds: null,
-        resetAt,
-        valueLabel,
+        windowSeconds,
+        resetAt: toTimestamp(resetAt),
+        valueLabel: state !== 'active' ? `(${state})` : null,
       });
     }
 
@@ -2430,7 +3192,7 @@ const WAFER_QUOTA_URL = 'https://pass.wafer.ai/v1/inference/quota';
 const WAFER_WINDOW_SECONDS = 5 * 3600;
 
 const fetchWaferQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['wafer', 'wafer-ai', 'wafer_ai', 'wafer.ai'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -2538,9 +3300,6 @@ const fetchWaferQuota = async (): Promise<ProviderResult> => {
 
 const NEURALWATT_QUOTA_URL = 'https://api.neuralwatt.com/v1/quota';
 
-// 30d month / 365d year are fixed approximations; real calendars vary but the
-// window is for the UI's progress bar label, not billing decisions.
-// Accepts both subscription (month/year) and allowance (monthly/weekly/daily) shapes.
 const neuralwattWindowSeconds = (period: string | null | undefined): number | null => {
   if (period === 'daily') return 86400;
   if (period === 'weekly') return 604800;
@@ -2550,7 +3309,7 @@ const neuralwattWindowSeconds = (period: string | null | undefined): number | nu
 };
 
 const fetchNeuralwattQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['neuralwatt'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -2602,9 +3361,6 @@ const fetchNeuralwattQuota = async (): Promise<ProviderResult> => {
       const plan = typeof subscription.plan === 'string' && subscription.plan.trim()
         ? subscription.plan.trim()
         : null;
-      // Subscription window title is the plan name; subscription limits reset
-      // monthly even on annual billing plans, but the API exposes no kWh window
-      // start to derive windowSeconds — pass null rather than fabricating a guess.
       const subKey = plan ?? 'plan_limit';
       const usedPercent = inOverage
         ? 100
@@ -2622,8 +3378,6 @@ const fetchNeuralwattQuota = async (): Promise<ProviderResult> => {
     if (allowance) {
       const spent = toNumber(allowance.spent_usd);
       const limit = toNumber(allowance.limit_usd);
-      // Credits wallet is reduced by each period's spend before the allowance cap
-      // bites, so the real ceiling is min(limit, creditsRemaining + spent).
       const effectiveSpent = spent ?? 0;
       const effectiveLimit = limit !== null && creditsRemaining !== null
         ? Math.min(limit, creditsRemaining + effectiveSpent)
@@ -2637,8 +3391,6 @@ const fetchNeuralwattQuota = async (): Promise<ProviderResult> => {
         : (spent !== null && effectiveLimit !== null && effectiveLimit > 0
             ? Math.max(0, Math.min(100, (spent / effectiveLimit) * 100))
             : null);
-      // Window title is the localized period label (daily/weekly/monthly); the
-      // usage value stays a percent so the UI's display-mode toggle applies.
       const periodKey = (period === 'daily' || period === 'weekly' || period === 'monthly' || period === 'month')
         ? (period === 'month' ? 'monthly' : period)
         : 'billing_cycle';
@@ -2694,9 +3446,6 @@ const fetchNeuralwattQuota = async (): Promise<ProviderResult> => {
 
 const CLINE_PASS_USAGE_URL = 'https://api.cline.bot/api/v1/users/me/plan/usage-limits';
 
-// Cline reports a rolling five-hour window, a rolling weekly window, and a
-// calendar-month limit. Each window carries its duration so consumers can rank
-// limits by how soon they run out; the calendar month has no fixed duration.
 const CLINE_WINDOW_KINDS = new Map<string, ClineWindowKind>([
   ['five_hour', { key: '5h', windowSeconds: 5 * 60 * 60 }],
   ['weekly', { key: 'weekly', windowSeconds: 7 * 24 * 60 * 60 }],
@@ -2704,12 +3453,12 @@ const CLINE_WINDOW_KINDS = new Map<string, ClineWindowKind>([
 ]);
 
 type ClineQuotaDependencies = {
-  readAuth?: () => AuthFile;
+  readAuth?: () => AuthFile | Promise<AuthFile>;
   fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
 };
 
-export const fetchClinePassQuota = async ({ readAuth = readAuthFile, fetchImpl = fetch }: ClineQuotaDependencies = {}): Promise<ProviderResult> => {
-  const auth = readAuth();
+export const fetchClinePassQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: ClineQuotaDependencies = {}): Promise<ProviderResult> => {
+  const auth = await readAuth();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['cline-pass']));
   const apiKey = asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
 
@@ -2804,10 +3553,109 @@ export const fetchClinePassQuota = async ({ readAuth = readAuthFile, fetchImpl =
   }
 };
 
+const DEEPINFRA_ME_URL = 'https://api.deepinfra.com/v1/me?checklist=true';
+
+type DeepinfraQuotaDependencies = {
+  readAuth?: () => AuthFile | Promise<AuthFile>;
+};
+
+const fetchDeepinfraQuota = async ({ readAuth = readOpenCodeCredentials }: DeepinfraQuotaDependencies = {}): Promise<ProviderResult> => {
+  const auth = await readAuth();
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['deepinfra', 'deep-infra', 'deep_infra'])) as Record<string, unknown> | null;
+  const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
+
+  if (!apiKey) {
+    return buildResult({
+      providerId: 'deepinfra',
+      providerName: 'DeepInfra',
+      ok: false,
+      configured: false,
+      error: 'Not configured',
+    });
+  }
+
+  const timeoutSignal = AbortSignal.timeout(15_000);
+
+  try {
+    const response = await fetch(DEEPINFRA_ME_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Accept-Encoding': 'identity',
+      },
+      signal: timeoutSignal,
+    });
+
+    if (!response.ok) {
+      return buildResult({
+        providerId: 'deepinfra',
+        providerName: 'DeepInfra',
+        ok: false,
+        configured: true,
+        error: response.status === 401 || response.status === 403
+          ? 'Session expired — please re-authenticate with DeepInfra'
+          : `API error: ${response.status}`,
+      });
+    }
+
+    // SAFETY: every DeepinfraPayload field is optional and the balance is parsed
+    // below, so an unexpected body ends as "No quota data in response".
+    const payload = await response.json() as DeepinfraPayload;
+    // external: https://docs.deepinfra.com/api-reference/account/me stripe_balance is negative for spendable funds and positive for money owed.
+    const rawBalance = payload?.checklist?.stripe_balance;
+    const stripeBalance = String(rawBalance ?? '').trim() === '' ? null : toNumber(rawBalance);
+
+    if (stripeBalance === null) {
+      return buildResult({
+        providerId: 'deepinfra',
+        providerName: 'DeepInfra',
+        ok: false,
+        configured: true,
+        error: 'No quota data in response',
+      });
+    }
+
+    const availableCredits = -stripeBalance;
+    const symbol = availableCredits < 0 ? '-$' : '$';
+    const windows = {
+      credits_balance: toUsageWindow({
+        usedPercent: null,
+        windowSeconds: null,
+        resetAt: null,
+        valueLabel: `${symbol}${formatMoney(Math.abs(availableCredits))}`,
+      }),
+    };
+
+    return buildResult({
+      providerId: 'deepinfra',
+      providerName: 'DeepInfra',
+      ok: true,
+      configured: true,
+      usage: { windows },
+    });
+  } catch (error) {
+    const isTimeout = error instanceof DOMException && (
+      error.name === 'TimeoutError' || (error.name === 'AbortError' && timeoutSignal.aborted)
+    );
+    const isParseError = error instanceof SyntaxError;
+    return buildResult({
+      providerId: 'deepinfra',
+      providerName: 'DeepInfra',
+      ok: false,
+      configured: true,
+      error: isTimeout
+        ? 'Request timed out'
+        : isParseError
+          ? 'Invalid response from provider'
+          : (error instanceof Error ? error.message : 'Request failed'),
+    });
+  }
+};
+
 const DEEPSEEK_QUOTA_URL = 'https://api.deepseek.com/user/balance';
 
 const fetchDeepseekQuota = async (): Promise<ProviderResult> => {
-  const auth = readAuthFile();
+  const auth = await readOpenCodeCredentials();
   const entry = normalizeAuthEntry(getAuthEntry(auth, ['deepseek'])) as Record<string, unknown> | null;
   const apiKey = (entry?.key as string | undefined) ?? (entry?.token as string | undefined);
 
@@ -2847,7 +3695,13 @@ const fetchDeepseekQuota = async (): Promise<ProviderResult> => {
 
     const payload = await response.json() as DeepseekPayload;
     const balanceInfos = Array.isArray(payload?.balance_infos) ? payload.balance_infos : [];
-    const balanceInfo = balanceInfos.find((info) => info?.currency === 'USD')
+    const positiveBalances = balanceInfos.filter((info) => {
+      const num = toNumber(info?.total_balance);
+      return typeof num === 'number' && num > 0;
+    });
+    const balanceInfo = positiveBalances.find((info) => info?.currency === 'USD')
+      ?? positiveBalances.find((info) => info?.currency === 'CNY')
+      ?? balanceInfos.find((info) => info?.currency === 'USD')
       ?? balanceInfos.find((info) => info?.currency === 'CNY')
       ?? null;
     const rawBalance = balanceInfo?.total_balance;
@@ -2901,6 +3755,30 @@ const fetchDeepseekQuota = async (): Promise<ProviderResult> => {
   }
 };
 
+const getMistralApiKey = (auth: AuthFile): string | null => {
+  const entry = normalizeAuthEntry(getAuthEntry(auth, ['mistral']));
+  return asNonEmptyString(entry?.key) ?? asNonEmptyString(entry?.token);
+};
+
+const fetchMistralQuota = async (): Promise<ProviderResult> => {
+  const apiKey = getMistralApiKey(await readOpenCodeCredentials());
+  if (!apiKey) {
+    return buildResult({ providerId: 'mistral', providerName: 'Mistral', ok: false, configured: false, error: 'Not configured' });
+  }
+  try {
+    const { windows, planLabel } = await fetchMistralUsage(apiKey);
+    return buildResult({ providerId: 'mistral', providerName: 'Mistral', ok: true, configured: true, usage: { windows }, planLabel });
+  } catch (error) {
+    return buildResult({
+      providerId: 'mistral',
+      providerName: 'Mistral',
+      ok: false,
+      configured: true,
+      error: error instanceof Error ? error.message : 'Request failed',
+    });
+  }
+};
+
 const HYPER_QUOTA_URL = 'https://hyper.charm.land/v1/credits';
 const HYPER_CREDIT_TO_USD = 0.05;
 
@@ -2910,12 +3788,12 @@ const getHyperApiKey = (auth: AuthFile) => {
 };
 
 type HyperQuotaDependencies = {
-  readAuth?: () => AuthFile;
+  readAuth?: () => AuthFile | Promise<AuthFile>;
   fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
 };
 
-export const fetchHyperQuota = async ({ readAuth = readAuthFile, fetchImpl = fetch }: HyperQuotaDependencies = {}): Promise<ProviderResult> => {
-  const apiKey = getHyperApiKey(readAuth());
+export const fetchHyperQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: HyperQuotaDependencies = {}): Promise<ProviderResult> => {
+  const apiKey = getHyperApiKey(await readAuth());
 
   if (!apiKey) {
     return buildResult({
@@ -3008,9 +3886,290 @@ export const fetchHyperQuota = async ({ readAuth = readAuthFile, fetchImpl = fet
   }
 };
 
-const fetchXaiQuota = async (): Promise<ProviderResult> => {
+const ZENMUX_BALANCE_URL = 'https://zenmux.ai/api/v1/management/payg/balance';
+
+type ZenmuxManagedCredential = {
+  platformApiKey: string;
+};
+
+type ZenmuxQuotaDependencies = {
+  readCredential?: () => ZenmuxManagedCredential | null;
+  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
+};
+
+const readZenmuxManagedCredential = (): ZenmuxManagedCredential | null => {
+  const platformApiKey = asNonEmptyString(readCredential('zenmux')?.platformApiKey);
+  return platformApiKey ? { platformApiKey } : null;
+};
+
+export const fetchZenmuxQuota = async ({
+  readCredential: readManaged = readZenmuxManagedCredential,
+  fetchImpl = fetch,
+}: ZenmuxQuotaDependencies = {}): Promise<ProviderResult> => {
+  const apiKey = asNonEmptyString(readManaged()?.platformApiKey);
+
+  if (!apiKey) {
+    return buildResult({
+      providerId: 'zenmux',
+      providerName: 'ZenMux',
+      ok: false,
+      configured: false,
+      error: 'Not configured',
+    });
+  }
+
+  const timeoutSignal = AbortSignal.timeout(15_000);
+
   try {
-    const entry = resolveXaiAuth();
+    const response = await fetchImpl(ZENMUX_BALANCE_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Accept-Encoding': 'identity',
+      },
+      signal: timeoutSignal,
+    });
+
+    if (!response.ok) {
+      return buildResult({
+        providerId: 'zenmux',
+        providerName: 'ZenMux',
+        ok: false,
+        configured: true,
+        error: response.status === 401 || response.status === 403
+          ? 'Invalid ZenMux Platform API key'
+          : `API error: ${response.status}`,
+      });
+    }
+
+    const payload = asObject(await response.json());
+    const data = asObject(payload?.data);
+    const rawCredits = data?.total_credits;
+    const totalCredits = toNumber(asNonEmptyString(rawCredits)
+      ?? (Number.isFinite(rawCredits) ? rawCredits : null));
+
+    if (totalCredits === null) {
+      return buildResult({
+        providerId: 'zenmux',
+        providerName: 'ZenMux',
+        ok: false,
+        configured: true,
+        error: 'No quota data in response',
+      });
+    }
+
+    const windows = {
+      credits_balance: toUsageWindow({
+        usedPercent: null,
+        windowSeconds: null,
+        resetAt: null,
+        valueLabel: `$${formatMoney(totalCredits)}`,
+      }),
+    };
+
+    return buildResult({
+      providerId: 'zenmux',
+      providerName: 'ZenMux',
+      ok: true,
+      configured: true,
+      usage: { windows },
+    });
+  } catch (error) {
+    const isTimeout = error instanceof DOMException && (
+      error.name === 'TimeoutError' || (error.name === 'AbortError' && timeoutSignal.aborted)
+    );
+    const isParseError = error instanceof SyntaxError;
+    return buildResult({
+      providerId: 'zenmux',
+      providerName: 'ZenMux',
+      ok: false,
+      configured: true,
+      error: isTimeout
+        ? 'Request timed out'
+        : isParseError
+          ? 'Invalid response from provider'
+          : (error instanceof Error ? error.message : 'Request failed'),
+    });
+  }
+};
+
+const KILO_BALANCE_URL = 'https://api.kilo.ai/api/profile/balance';
+const KILO_AUTH_ALIASES = ['kilo', 'kilocode', 'kilo-code'];
+
+const getKiloAuthEntry = (auth: AuthFile) => normalizeAuthEntry(getAuthEntry(auth, KILO_AUTH_ALIASES));
+
+const getKiloApiKey = (auth: AuthFile) => {
+  const entry = getKiloAuthEntry(auth);
+  return asNonEmptyString(entry?.key)
+    ?? asNonEmptyString(entry?.token)
+    ?? asNonEmptyString(entry?.access);
+};
+
+const readKiloOrganizationIdFromUserConfig = (): string | null => {
+  try {
+    const configPath = path.join(OPENCODE_CONFIG_DIR, 'opencode.json');
+    if (!fs.existsSync(configPath)) return null;
+    const parsed = asObject(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+    const provider = asObject(parsed?.provider);
+    const kilo = asObject(provider?.kilo) ?? asObject(provider?.kilocode);
+    const options = asObject(kilo?.options);
+    return asNonEmptyString(options?.kilocodeOrganizationId)
+      ?? asNonEmptyString(options?.organizationId);
+  } catch {
+    return null;
+  }
+};
+
+type KiloQuotaDependencies = {
+  readAuth?: () => AuthFile | Promise<AuthFile>;
+  readOrganizationId?: () => string | null;
+  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
+};
+
+export const fetchKiloQuota = async ({
+  readAuth = readOpenCodeCredentials,
+  readOrganizationId = readKiloOrganizationIdFromUserConfig,
+  fetchImpl = fetch,
+}: KiloQuotaDependencies = {}): Promise<ProviderResult> => {
+  const auth = await readAuth();
+  const entry = getKiloAuthEntry(auth);
+  const apiKey = getKiloApiKey(auth);
+
+  if (!apiKey) {
+    return buildResult({
+      providerId: 'kilo',
+      providerName: 'Kilo Code',
+      ok: false,
+      configured: false,
+      error: 'Not configured',
+    });
+  }
+
+  const organizationId = asNonEmptyString(entry?.kilocodeOrganizationId)
+    ?? asNonEmptyString(entry?.organizationId)
+    ?? asNonEmptyString(entry?.accountId)
+    ?? readOrganizationId();
+
+  const timeoutSignal = AbortSignal.timeout(15_000);
+
+  try {
+    const headers = organizationId
+      ? {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept-Encoding': 'identity',
+          'x-kilocode-organizationid': organizationId,
+        }
+      : {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'Accept-Encoding': 'identity',
+        };
+
+    const response = await fetchImpl(KILO_BALANCE_URL, {
+      method: 'GET',
+      headers,
+      signal: timeoutSignal,
+    });
+
+    if (!response.ok) {
+      return buildResult({
+        providerId: 'kilo',
+        providerName: 'Kilo Code',
+        ok: false,
+        configured: true,
+        error: response.status === 401 || response.status === 403
+          ? 'Session expired — please re-authenticate with Kilo Code'
+          : `API error: ${response.status}`,
+      });
+    }
+
+    const payload = asObject(await response.json());
+    const rawBalance = payload?.balance;
+    const balance = toNumber(asNonEmptyString(rawBalance)
+      ?? (Number.isFinite(rawBalance) ? rawBalance : null));
+
+    if (balance === null) {
+      return buildResult({
+        providerId: 'kilo',
+        providerName: 'Kilo Code',
+        ok: false,
+        configured: true,
+        error: 'No quota data in response',
+      });
+    }
+
+    const windows = {
+      credits_balance: toUsageWindow({
+        usedPercent: null,
+        windowSeconds: null,
+        resetAt: null,
+        valueLabel: `$${formatMoney(balance)}`,
+      }),
+    };
+
+    return buildResult({
+      providerId: 'kilo',
+      providerName: 'Kilo Code',
+      ok: true,
+      configured: true,
+      usage: { windows },
+    });
+  } catch (error) {
+    const isTimeout = error instanceof DOMException && (
+      error.name === 'TimeoutError' || (error.name === 'AbortError' && timeoutSignal.aborted)
+    );
+    const isParseError = error instanceof SyntaxError;
+    return buildResult({
+      providerId: 'kilo',
+      providerName: 'Kilo Code',
+      ok: false,
+      configured: true,
+      error: isTimeout
+        ? 'Request timed out'
+        : isParseError
+          ? 'Invalid response from provider'
+          : (error instanceof Error ? error.message : 'Request failed'),
+    });
+  }
+};
+
+type XaiQuotaDependencies = {
+  readAuth?: () => AuthFile | Promise<AuthFile>;
+  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
+};
+
+const fetchOpenCodeGoQuota = async (): Promise<ProviderResult> => {
+  const providerId = 'opencode-go';
+  try {
+    deleteLegacyOpenCodeGoCredential();
+    const auth = await readOpenCodeCredentials();
+    const consoleCredential = openCodeGoConsoleCredential(auth) ?? openCodeGoKey(auth, 'opencode');
+    const apiKey = openCodeGoKey(auth, 'opencode-go');
+    let consoleFailure: Error | null = null;
+    if (consoleCredential) {
+      try {
+        return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(consoleCredential) }, accountLabel: consoleCredential.label });
+      } catch (consoleError) {
+        const consoleKey = 'apiKey' in consoleCredential;
+        if (!apiKey || (consoleKey && !isOpenCodeGoKeyRefusal(consoleError))) throw consoleError;
+        if (!consoleKey) consoleFailure = consoleError instanceof Error ? consoleError : new Error('Request failed');
+      }
+    }
+    if (!apiKey) return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: false, error: 'Not configured' });
+    try {
+      return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(apiKey) }, accountLabel: apiKey.label });
+    } catch (keyError) {
+      throw consoleFailure && keyError instanceof Error && keyError.message === OPENCODE_GO_KEY_EXPIRED ? consoleFailure : keyError;
+    }
+  } catch (error) {
+    return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
+  }
+};
+
+export const fetchXaiQuota = async ({ readAuth = readOpenCodeCredentials, fetchImpl = fetch }: XaiQuotaDependencies = {}): Promise<ProviderResult> => {
+  try {
+    const entry = resolveXaiAuth(await readAuth());
     if (!entry) {
       return buildResult({
         providerId: 'xai',
@@ -3021,8 +4180,8 @@ const fetchXaiQuota = async (): Promise<ProviderResult> => {
       });
     }
 
-    const accessToken = await getXaiAccessToken(entry);
-    const response = await fetch(XAI_USAGE_ENDPOINT, {
+    const accessToken = requireXaiAccessToken(entry);
+    const response = await fetchImpl(XAI_USAGE_ENDPOINT, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -3092,6 +4251,8 @@ const fetchQuotaForProviderUncoalesced = async (providerId: string): Promise<Pro
       return fetchCopilotAddonQuota();
     case 'google':
       return fetchGoogleQuota();
+    case 'antigravity':
+      return fetchAntigravityQuota();
     case 'kimi-for-coding':
       return fetchKimiQuota();
     case 'nano-gpt':
@@ -3113,28 +4274,46 @@ const fetchQuotaForProviderUncoalesced = async (providerId: string): Promise<Pro
     case 'wafer':
       return fetchWaferQuota();
     case 'opencode-go': {
+      const [result, consoleBudgets] = await Promise.all([fetchOpenCodeGoQuota(), readConsoleBudgets()]);
+      return withConsoleBudgets(result, consoleBudgets);
+    }
+    case 'opencode': {
       try {
-        deleteLegacyOpenCodeGoCredential();
-        const entry = normalizeAuthEntry(getAuthEntry(readAuthFile(), ['opencode-go']));
-        const apiKey = typeof entry?.key === 'string' ? entry.key : typeof entry?.token === 'string' ? entry.token : null;
-        if (!apiKey) return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: false, error: 'Not configured' });
-        return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage({ apiKey }) } });
+        const auth = await readOpenCodeCredentials();
+        const credential = openCodeZenCredential(auth);
+        if (!credential) return buildResult({ providerId, providerName: 'OpenCode Zen', ok: false, configured: false, error: 'Not configured' });
+        const usage = await fetchOpenCodeZenUsage(credential);
+        return buildResult({
+          providerId,
+          providerName: 'OpenCode Zen',
+          ok: true,
+          configured: true,
+          usage: { ...usage, models: Object.keys(usage.models).length ? usage.models : undefined },
+        });
       } catch (error) {
-        return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
+        return buildResult({ providerId, providerName: 'OpenCode Zen', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
       }
     }
     case 'cursor':
       return fetchCursorQuota();
     case 'cline-pass':
       return fetchClinePassQuota();
+    case 'deepinfra':
+      return fetchDeepinfraQuota();
     case 'deepseek':
       return fetchDeepseekQuota();
     case 'hyper':
       return fetchHyperQuota();
     case 'neuralwatt':
       return fetchNeuralwattQuota();
+    case 'kilo':
+      return fetchKiloQuota();
+    case 'zenmux':
+      return fetchZenmuxQuota();
     case 'xai':
       return fetchXaiQuota();
+    case 'mistral':
+      return fetchMistralQuota();
     default:
       return buildResult({
         providerId,

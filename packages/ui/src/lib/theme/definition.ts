@@ -3,7 +3,11 @@ import type { Theme } from '../../types/theme';
 import { mixColor, onColor, readableText, withOpacity } from './color';
 import { resolveSyntaxTokens } from './syntax';
 
-const color = z.string().trim().min(1);
+const COLOR_PATTERN = /^(?:#[\da-f]{3,8}|[a-z]+|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark)\([\w#.,%\s/+()-]*\))$/i;
+const LOADS_RESOURCE = /\b(?:url|image|image-set|cross-fade|element)\s*\(|@import/i;
+const text = z.string().trim().min(1);
+const color = text.refine((value) => COLOR_PATTERN.test(value) && !LOADS_RESOURCE.test(value), 'Expected a CSS colour');
+const cssValue = z.string().refine((value) => !/[;{}<>\\]/.test(value) && !LOADS_RESOURCE.test(value), 'Unsupported CSS value');
 const optionalColors = (keys: string[]) => z.record(z.string(), color).transform((values) => Object.fromEntries(Object.entries(values).filter(([key]) => keys.includes(key))));
 const primary = z.object({ base: color, foreground: color.optional(), hover: color.optional(), active: color.optional(), muted: color.optional() });
 const surface = z.object({ background: color, foreground: color, muted: color, mutedForeground: color, elevated: color, elevatedForeground: color.optional(), overlay: color.optional(), subtle: color.optional() });
@@ -20,7 +24,7 @@ const syntax = z.object({
   highlights: z.record(z.string(), color).optional(),
 });
 const definition = z.object({
-  metadata: z.object({ id: color, name: color, variant: z.enum(['light', 'dark']), description: z.string().default(''), version: z.string().default('1.0.0'), author: z.string().optional(), tags: z.array(z.string()).default([]) }),
+  metadata: z.object({ id: text, name: text, variant: z.enum(['light', 'dark']), description: z.string().default(''), version: z.string().default('1.0.0'), author: z.string().optional(), tags: z.array(z.string()).default([]) }),
   colors: z.object({
     primary, surface, interactive, status, syntax,
     pr: z.object({ open: color.optional(), draft: color.optional(), blocked: color.optional(), merged: color.optional(), closed: color.optional() }).optional(),
@@ -28,12 +32,11 @@ const definition = z.object({
     markdown: optionalColors(['link', 'linkHover', 'inlineCode', 'inlineCodeBackground', 'blockquote', 'blockquoteBorder', 'listMarker', 'bold', 'italic', 'strikethrough', 'hr']).optional(),
     tools: z.object({ border: color.optional(), icon: color.optional(), title: color.optional(), description: color.optional(), edit: optionalColors(['addedBackground', 'removedBackground', 'modifiedBackground', 'lineNumber']).optional() }).optional(),
   }),
-  config: z.object({ fonts: z.object({ sans: z.string().optional(), mono: z.string().optional(), heading: z.string().optional() }).optional(), transitions: z.object({ fast: z.string().optional(), normal: z.string().optional(), slow: z.string().optional() }).optional() }).optional(),
+  config: z.object({ fonts: z.object({ sans: cssValue.optional(), mono: cssValue.optional(), heading: cssValue.optional() }).optional(), transitions: z.object({ fast: cssValue.optional(), normal: cssValue.optional(), slow: cssValue.optional() }).optional() }).optional(),
 });
 
 export type ThemeDefinition = z.input<typeof definition>;
 
-/** One boundary for built-ins, custom files and development reloads. */
 function resolveTheme(source: z.output<typeof definition>): Theme {
   const { metadata, colors: c, config } = source;
   const neutral = metadata.variant === 'dark' ? '#ffffff' : '#000000';
@@ -89,7 +92,6 @@ export const themeSchema = definition.transform(resolveTheme);
 export const requireTheme = themeSchema.parse;
 export const themeListSchema = z.array(themeSchema.nullable().catch(null)).transform((themes) => themes.filter((theme): theme is Theme => theme !== null));
 
-/** Remove only semantic defaults, never equal colors belonging to unrelated roles. */
 export function compactTheme(value: ThemeDefinition): ThemeDefinition {
   const source = definition.parse(value);
   const c = source.colors;
@@ -115,7 +117,6 @@ export function compactTheme(value: ThemeDefinition): ThemeDefinition {
   c.status = prune(c.status, { ...defaults.colors.status }, ['error', 'warning', 'success', 'info']);
   c.syntax.base = prune(c.syntax.base, { background: c.surface.background, foreground: c.surface.foreground }, ['comment', 'keyword', 'string', 'number', 'function', 'variable', 'type', 'operator']);
   if (c.syntax.tokens) {
-    // Resolve without each override, so dependent roles remain correct after pruning.
     for (const key of Object.keys(c.syntax.tokens)) {
       const candidate = { ...c.syntax.tokens };
       delete candidate[key];

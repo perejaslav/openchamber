@@ -1,20 +1,14 @@
+import { z } from 'zod';
 import type { Session } from '@/lib/opencode/model';
 import { isJsonValue, type JsonValue } from '@openchamber/sdk';
 import { getSessionMetadata, type SessionMetadataRecord } from './sessionReviewMetadata';
+import type { RepositoryUrlMatcher } from './source-control/repositoryUrlMatcher';
+import { formatChangeRequestReference } from './source-control/providers/terminology';
+import { joinProjectPath } from './source-control/projectPath';
+import { storedTrackerLinkKind } from './trackers/legacyLinear';
 
-/**
- * Issues and pull requests a user has linked to a session.
- *
- * Stored as a **snapshot**, not a reference: identifier or number, title, author
- * and avatar only. Enough to render a row and open the thing, and nothing more.
- *
- * Rides the same session-metadata channel as pinned messages
- * (`contextObligatoryMessages`), so it inherits their persistence and sync for
- * free.
- */
 
-export type LinkedGitHubIssue = {
-  /** `owner/repo#number`, unique per session and stable across renames. */
+type LinkedRepositoryIssue = {
   id: string;
   number: number;
   title: string;
@@ -25,46 +19,53 @@ export type LinkedGitHubIssue = {
   linkedAt: number;
 };
 
-export type LinkedLinearIssue = {
-  /** `linear:{identifier}`, unique per session. */
+type LinkedTrackerItem = {
   id: string;
+  kind: 'tracker';
+  provider: string;
   identifier: string;
   title: string;
   url: string;
-  kind: 'linear';
   author?: string;
   authorAvatarUrl?: string;
   linkedAt: number;
 };
 
 export type LinkedGuestIssue = {
-  /** `guest:{providerId}:{identifier}`, unique per session. */
   id: string;
   providerId: string;
   identifier: string;
   title: string;
   url: string;
   kind: 'guest';
-  /** Missing on older snapshots; those are issues. */
   thread?: 'issue' | 'pull';
   author?: string;
   head?: string;
   base?: string;
-  /** Opaque guest payload from `attach`, handed back as `ready.item.data`. Never shown or sent to the model. */
   data?: JsonValue;
   linkedAt: number;
 };
 
-export const isGuestPull = (entry: { thread?: 'issue' | 'pull' }): boolean => (
+const isGuestPull = (entry: { thread?: 'issue' | 'pull' }): boolean => (
   entry.thread === 'pull'
 );
 
-export type LinkedIssue = LinkedGitHubIssue | LinkedLinearIssue | LinkedGuestIssue;
+type LinkedExternalItem = {
+  id: string;
+  kind: 'external';
+  thread: 'issue' | 'change';
+  identifier: string;
+  title: string;
+  url: string;
+  linkedAt: number;
+};
+
+export type LinkedIssue = LinkedRepositoryIssue | LinkedTrackerItem | LinkedGuestIssue | LinkedExternalItem;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
-const isLinkedGitHubIssue = (value: unknown): value is LinkedGitHubIssue => (
+const isLinkedRepositoryIssue = (value: unknown): value is LinkedRepositoryIssue => (
   isRecord(value)
   && typeof value.id === 'string'
   && value.id.length > 0
@@ -77,18 +78,21 @@ const isLinkedGitHubIssue = (value: unknown): value is LinkedGitHubIssue => (
   && Number.isFinite(value.linkedAt)
 );
 
-const isLinkedLinearIssue = (value: unknown): value is LinkedLinearIssue => (
-  isRecord(value)
-  && typeof value.id === 'string'
-  && value.id.length > 0
-  && typeof value.identifier === 'string'
-  && value.identifier.length > 0
-  && typeof value.title === 'string'
-  && typeof value.url === 'string'
-  && value.kind === 'linear'
-  && typeof value.linkedAt === 'number'
-  && Number.isFinite(value.linkedAt)
-);
+const trackerEntryFields = z.object({
+  id: z.string().min(1),
+  identifier: z.string().min(1),
+  title: z.string(),
+  url: z.string(),
+  author: z.string().optional().catch(undefined),
+  authorAvatarUrl: z.string().optional().catch(undefined),
+  linkedAt: z.number(),
+});
+
+const linkedTrackerItemSchema = z.union([
+  trackerEntryFields.extend({ kind: z.literal('tracker'), provider: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/) }),
+  trackerEntryFields.extend({ kind: z.literal('linear') })
+    .transform((entry) => ({ ...entry, kind: 'tracker' as const, provider: 'linear' })),
+]) satisfies z.ZodType<LinkedTrackerItem>;
 
 const isLinkedGuestIssue = (value: unknown): value is LinkedGuestIssue => (
   isRecord(value)
@@ -110,24 +114,40 @@ const isLinkedGuestIssue = (value: unknown): value is LinkedGuestIssue => (
   && Number.isFinite(value.linkedAt)
 );
 
-const isLinkedIssue = (value: unknown): value is LinkedIssue => (
-  isLinkedGitHubIssue(value) || isLinkedLinearIssue(value) || isLinkedGuestIssue(value)
+const isLinkedExternalItem = (value: unknown): value is LinkedExternalItem => (
+  isRecord(value)
+  && typeof value.id === 'string'
+  && value.id.length > 0
+  && value.kind === 'external'
+  && (value.thread === 'issue' || value.thread === 'change')
+  && typeof value.identifier === 'string'
+  && value.identifier.length > 0
+  && typeof value.title === 'string'
+  && typeof value.url === 'string'
+  && typeof value.linkedAt === 'number'
+  && Number.isFinite(value.linkedAt)
+);
+
+const isLinkedIssue = (value: unknown): value is Exclude<LinkedIssue, LinkedTrackerItem> => (
+  isLinkedRepositoryIssue(value) || isLinkedGuestIssue(value) || isLinkedExternalItem(value)
+);
+
+const linkedIssueListSchema = z.array(z.unknown()).catch([]).transform((values) => values.flatMap((value): LinkedIssue[] => {
+  if (isLinkedIssue(value)) return [value];
+  const tracker = linkedTrackerItemSchema.safeParse(value);
+  return tracker.success ? [tracker.data] : [];
+}));
+
+export const isLinkedChange = (entry: LinkedIssue): boolean => (
+  entry.kind === 'pull'
+  || (entry.kind === 'guest' && isGuestPull(entry))
+  || (entry.kind === 'external' && entry.thread === 'change')
 );
 
 export const buildLinkedIssueId = (owner: string, repo: string, number: number): string =>
   `${owner}/${repo}#${number}`;
 
-const buildLinkedLinearIssueId = (identifier: string): string =>
-  `linear:${identifier}`;
 
-/**
- * Builds the stored snapshot from what an attach flow already has.
- *
- * The id comes from the URL rather than a separate owner/repo pair: every flow
- * that attaches a thread has its URL, and only some of them carry the repo
- * separately. A URL that does not parse falls back to itself, which is still
- * unique per thread — the id only has to identify an entry, not be pretty.
- */
 export const buildLinkedIssue = (input: {
   url: string;
   number: number;
@@ -135,11 +155,26 @@ export const buildLinkedIssue = (input: {
   kind: 'issue' | 'pull';
   author?: { login?: string; avatarUrl?: string } | null;
   linkedAt: number;
-}): LinkedGitHubIssue => {
-  const match = /github\.com\/([^/]+)\/([^/]+)\//.exec(input.url);
-  const id = match
-    ? buildLinkedIssueId(match[1], match[2], input.number)
-    : `${input.url}#${input.number}`;
+}): LinkedRepositoryIssue => {
+  let project: { host: string; owner: string; name: string } | null = null;
+  try {
+    const parsed = new URL(input.url);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const threadIndex = segments.findIndex((segment) => (
+      segment === 'issues' || segment === 'pull'
+    ));
+    const projectNameIndex = segments[threadIndex - 1] === '-' ? threadIndex - 2 : threadIndex - 1;
+    const owner = segments.slice(0, projectNameIndex).join('/');
+    const name = segments[projectNameIndex];
+    if (threadIndex > 1 && owner && name) project = { host: parsed.hostname.toLowerCase(), owner, name };
+  } catch {
+    // The URL itself remains a stable fallback id for malformed provider data.
+  }
+  const id = !project
+    ? `${input.url}#${input.number}`
+    : project.host === 'github.com' || project.host === 'www.github.com'
+      ? buildLinkedIssueId(project.owner, project.name, input.number)
+      : `${project.host}:${buildLinkedIssueId(project.owner, project.name, input.number)}`;
 
   return {
     id,
@@ -192,41 +227,204 @@ export const buildLinkedGuestIssue = (input: {
   return next;
 };
 
-export const buildLinkedLinearIssue = (input: {
+export const buildLinkedDiscussion = (input: { url: string; number: number; title: string; linkedAt: number }): LinkedExternalItem => {
+  let canonical = input.url;
+  try {
+    const parsed = new URL(input.url);
+    const thread = /^\/[^/]+\/[^/]+\/discussions\/\d+/.exec(parsed.pathname);
+    if (thread) canonical = `${parsed.origin}${thread[0]}`;
+  } catch {
+    // The URL itself stays a stable id for malformed provider data.
+  }
+  return {
+    id: `link:${canonical}`,
+    kind: 'external',
+    thread: 'issue',
+    identifier: `#${input.number}`,
+    title: input.title,
+    url: input.url,
+    linkedAt: input.linkedAt,
+  };
+};
+
+export const buildLinkedTrackerItem = (input: {
+  provider: string;
   identifier: string;
   title: string;
   url: string;
   author?: { login?: string; avatarUrl?: string } | null;
   linkedAt: number;
-}): LinkedLinearIssue => ({
-  id: buildLinkedLinearIssueId(input.identifier),
+}): LinkedTrackerItem => ({
+  id: `${input.provider}:${input.identifier}`,
+  kind: 'tracker',
+  provider: input.provider,
   identifier: input.identifier,
   title: input.title,
   url: input.url,
-  kind: 'linear',
   author: input.author?.login ?? undefined,
   authorAvatarUrl: input.author?.avatarUrl ?? undefined,
   linkedAt: input.linkedAt,
 });
 
-export const canOpenLinearIssueInContextPanel = (options: {
-  linearAvailable: boolean;
-  linearConnected: boolean;
-  inDedicatedMobileShell: boolean;
-  directory: string | null | undefined;
-}): boolean => (
-  options.linearAvailable
-  && options.linearConnected
-  && !options.inDedicatedMobileShell
-  && Boolean(options.directory?.trim())
+type StoredLinkedIssue = Exclude<LinkedIssue, LinkedTrackerItem> | (Omit<LinkedTrackerItem, 'kind'> & { kind: 'tracker' | 'linear' });
+
+export const toStoredLinkedIssue = (entry: LinkedIssue): StoredLinkedIssue => (
+  entry.kind === 'tracker' ? { ...entry, kind: storedTrackerLinkKind(entry.provider) } : entry
 );
 
 export const getLinkedIssues = (session: Session | null | undefined): LinkedIssue[] => {
   const openchamber = getSessionMetadata(session).openchamber;
   if (!isRecord(openchamber) || !Array.isArray(openchamber.linked_issues)) return [];
-  // Malformed entries are dropped rather than rendered: a half-written link
-  // has no row worth showing.
-  return openchamber.linked_issues.filter(isLinkedIssue);
+  return linkedIssueListSchema.parse(openchamber.linked_issues);
+};
+
+export type RepositoryThreadRef = {
+  key: string;
+  provider: string;
+  instance: string;
+  owner: string;
+  repo: string;
+  number: number;
+  thread: 'pull' | 'issue' | 'discussion';
+};
+
+export const getRepositoryThreadRef = (entry: LinkedIssue, matcher: RepositoryUrlMatcher): RepositoryThreadRef | null => {
+  if (entry.kind === 'tracker') return null;
+  const match = matcher.match(entry.url);
+  if (!match || !Number.isSafeInteger(match.number) || match.number < 1) return null;
+  const repositoryEntry = entry.kind === 'issue' || entry.kind === 'pull';
+  if (repositoryEntry && match.number !== entry.number) return null;
+  const thread = repositoryEntry ? entry.kind : match.kind;
+  return {
+    key: `${match.provider}|${match.instance}|${joinProjectPath(match.owner, match.repo)}|${thread}#${match.number}`.toLowerCase(),
+    provider: match.provider,
+    instance: match.instance,
+    owner: match.owner,
+    repo: match.repo,
+    number: match.number,
+    thread,
+  };
+};
+
+const repositoryThreadIdentifier = (ref: RepositoryThreadRef, matcher: RepositoryUrlMatcher): string => {
+  const descriptor = matcher.descriptorOf(ref.provider);
+  return ref.thread === 'pull'
+    ? formatChangeRequestReference(descriptor, ref.number)
+    : `${descriptor.terminology.issuePrefix}${ref.number}`;
+};
+
+export const getDistinctLinkedIssues = (session: Session | null | undefined, matcher: RepositoryUrlMatcher): LinkedIssue[] => {
+  const seen = new Set<string>();
+  return getLinkedIssues(session).filter((entry) => {
+    const key = getRepositoryThreadRef(entry, matcher)?.key;
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+export type LinkedSidebarChange = {
+  key: string;
+  identifier: string;
+  url: string;
+  title: string;
+  repository?: RepositoryThreadRef;
+};
+
+const buildLinkedSidebarChanges = (session: Session | null | undefined, matcher: RepositoryUrlMatcher): LinkedSidebarChange[] => {
+  const seen = new Set<string>();
+  return getLinkedIssues(session).flatMap((entry): LinkedSidebarChange[] => {
+    if (!isLinkedChange(entry)) return [];
+    const repository = getRepositoryThreadRef(entry, matcher);
+    if (repository?.thread === 'discussion') return [];
+    if (repository) {
+      if (seen.has(repository.key)) return [];
+      seen.add(repository.key);
+      return [{ key: repository.key, identifier: repositoryThreadIdentifier(repository, matcher), url: entry.url, title: entry.title, repository }];
+    }
+    if (entry.kind === 'pull') return [{ key: entry.id, identifier: `#${entry.number}`, url: entry.url, title: entry.title }];
+    return entry.kind === 'guest' || entry.kind === 'external'
+      ? [{ key: entry.id, identifier: entry.identifier, url: entry.url, title: entry.title }]
+      : [];
+  });
+};
+
+export type LinkedSidebarIssue =
+  | { source: 'repository'; key: string; ref: RepositoryThreadRef & { thread: 'issue' | 'discussion' }; identifier: string; url: string; title: string }
+  | { source: 'tracker'; provider: string; key: string; identifier: string; url: string; title: string }
+  | { source: 'guest' | 'external'; key: string; identifier: string; url: string; title: string };
+
+const buildLinkedSidebarIssues = (session: Session | null | undefined, matcher: RepositoryUrlMatcher): LinkedSidebarIssue[] => {
+  const seen = new Set<string>();
+  return getLinkedIssues(session).flatMap((entry): LinkedSidebarIssue[] => {
+    const ref = getRepositoryThreadRef(entry, matcher);
+    if (isLinkedChange(entry) && ref?.thread !== 'discussion') return [];
+    if (ref) {
+      const { thread } = ref;
+      if (thread === 'pull' || seen.has(ref.key)) return [];
+      seen.add(ref.key);
+      return [{ source: 'repository', key: ref.key, ref: { ...ref, thread }, identifier: repositoryThreadIdentifier(ref, matcher), url: entry.url, title: entry.title }];
+    }
+    if (entry.kind === 'issue') {
+      return [{ source: 'external', key: entry.id, identifier: `#${entry.number}`, url: entry.url, title: entry.title }];
+    }
+    if (entry.kind === 'tracker') {
+      return [{ source: 'tracker', provider: entry.provider, key: entry.id, identifier: entry.identifier, url: entry.url, title: entry.title }];
+    }
+    if (entry.kind === 'guest') {
+      return [{ source: 'guest', key: entry.id, identifier: entry.identifier, url: entry.url, title: entry.title }];
+    }
+    if (entry.kind === 'external') {
+      return [{ source: 'external', key: entry.id, identifier: entry.identifier, url: entry.url, title: entry.title }];
+    }
+    return [];
+  });
+};
+
+type SidebarLinks = {
+  changes?: LinkedSidebarChange[];
+  issues?: LinkedSidebarIssue[];
+};
+
+const sidebarLinksBySession = new WeakMap<Session, WeakMap<RepositoryUrlMatcher, SidebarLinks>>();
+
+const sidebarLinksOf = (session: Session, matcher: RepositoryUrlMatcher): SidebarLinks => {
+  let byMatcher = sidebarLinksBySession.get(session);
+  if (!byMatcher) {
+    byMatcher = new WeakMap();
+    sidebarLinksBySession.set(session, byMatcher);
+  }
+  let links = byMatcher.get(matcher);
+  if (!links) {
+    links = {};
+    byMatcher.set(matcher, links);
+  }
+  return links;
+};
+
+export const getLinkedSidebarChanges = (session: Session | null | undefined, matcher: RepositoryUrlMatcher): LinkedSidebarChange[] => {
+  if (!session) return buildLinkedSidebarChanges(session, matcher);
+  const links = sidebarLinksOf(session, matcher);
+  links.changes ??= buildLinkedSidebarChanges(session, matcher);
+  return links.changes;
+};
+
+export const getLinkedSidebarIssues = (session: Session | null | undefined, matcher: RepositoryUrlMatcher): LinkedSidebarIssue[] => {
+  if (!session) return buildLinkedSidebarIssues(session, matcher);
+  const links = sidebarLinksOf(session, matcher);
+  links.issues ??= buildLinkedSidebarIssues(session, matcher);
+  return links.issues;
+};
+
+const normalizedThreadUrl = (url: string): string => url.trim().replace(/\/+$/, '').toLowerCase();
+
+const isSameLinkedEntry = (entry: LinkedIssue, issue: LinkedIssue): boolean => {
+  if (entry.id === issue.id) return true;
+  return (entry.kind === 'issue' || entry.kind === 'pull')
+    && entry.kind === issue.kind
+    && entry.number === issue.number
+    && normalizedThreadUrl(entry.url) === normalizedThreadUrl(issue.url);
 };
 
 export const withLinkedIssue = (
@@ -236,18 +434,16 @@ export const withLinkedIssue = (
 ): SessionMetadataRecord => {
   const openchamber = isRecord(metadata.openchamber) ? metadata.openchamber : {};
   const current = Array.isArray(openchamber.linked_issues)
-    ? openchamber.linked_issues.filter(isLinkedIssue)
+    ? linkedIssueListSchema.parse(openchamber.linked_issues)
     : [];
-  const withoutIssue = current.filter((entry) => entry.id !== issue.id);
-  // Re-linking an existing entry replaces it, so a stale title can be refreshed
-  // by linking again.
+  const withoutIssue = current.filter((entry) => !isSameLinkedEntry(entry, issue));
   const next = linked ? [...withoutIssue, issue] : withoutIssue;
 
   return {
     ...metadata,
     openchamber: {
       ...openchamber,
-      linked_issues: next,
+      linked_issues: next.map(toStoredLinkedIssue),
     },
   };
 };

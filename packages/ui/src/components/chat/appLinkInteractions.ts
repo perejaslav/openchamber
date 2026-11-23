@@ -1,9 +1,12 @@
 import { isAppLinkUrl, isExternalHttpUrl } from '@/lib/url';
+import { parseSessionLink, type SessionLinkTarget } from '@/lib/sessionLinks';
 
 type AppLinkInteractionOptions = {
   allowExternalHttp: boolean;
   openAppLink: (url: string) => void;
   openExternalHttp: (url: string) => void;
+  openSessionLink?: (target: SessionLinkTarget) => void;
+  ownOrigins?: readonly string[];
 };
 
 type LinkInteractionContainer = {
@@ -43,11 +46,26 @@ const isPlainPrimaryClick = (event: MouseEvent): boolean => (
   && !event.shiftKey
 );
 
+const interceptSessionLink = (event: MouseEvent, options: AppLinkInteractionOptions): boolean => {
+  const openSessionLink = options.openSessionLink;
+  if (!openSessionLink || event.defaultPrevented) return false;
+  const href = findLink(event)?.getAttribute('href') ?? '';
+  const target = parseSessionLink(href, options.ownOrigins ?? []);
+  if (!target) return false;
+  if (isExternalHttpUrl(href) && !isPlainPrimaryClick(event)) return false;
+
+  event.preventDefault();
+  event.stopPropagation();
+  openSessionLink(target);
+  return true;
+};
+
 export const attachAppLinkInteractions = (
   container: LinkInteractionContainer,
   options: AppLinkInteractionOptions,
 ): (() => void) => {
   const handleClick = (event: MouseEvent) => {
+    if (interceptSessionLink(event, options)) return;
     if (interceptAppLink(event, options.openAppLink)) return;
     if (!options.allowExternalHttp || event.defaultPrevented || !isPlainPrimaryClick(event)) return;
 

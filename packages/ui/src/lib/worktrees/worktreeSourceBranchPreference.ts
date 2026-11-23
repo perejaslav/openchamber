@@ -1,64 +1,24 @@
-export const LAST_WORKTREE_SOURCE_BRANCH_KEY = 'oc:lastWorktreeSourceBranch';
-
-export interface WorktreeSourceBranchPreferenceArgs {
+interface WorktreeSourceBranchArgs {
   branches: readonly string[];
-  savedSourceBranch: string | null;
   rootBranch: string | null;
+  defaultBranch?: string | null;
+  remote?: string;
 }
 
-export interface WorktreeSourceBranchPreferenceResult {
-  sourceBranch: string;
-  shouldClearSavedSourceBranch: boolean;
-}
-
-export interface WorktreeSourceBranchPersistArgs {
-  mode: 'new-branch' | 'existing-branch';
-  sourceBranch: string;
-  linkedPr: boolean;
-  selectedBranch: string;
-}
-
-export const resolveWorktreeSourceBranchToPersist = ({
-  mode,
-  sourceBranch,
-  linkedPr,
-  selectedBranch,
-}: WorktreeSourceBranchPersistArgs): string | null => {
-  if (mode === 'existing-branch') {
-    return selectedBranch || null;
+export const resolveDefaultSourceBranch = ({ branches, rootBranch, defaultBranch, remote }: WorktreeSourceBranchArgs): string => {
+  if (defaultBranch) {
+    const tracking = remote ? `remotes/${remote}/${defaultBranch}` : null;
+    if (tracking && branches.includes(tracking)) return tracking;
+    if (branches.includes(defaultBranch)) return defaultBranch;
   }
-
-  if (linkedPr) {
-    return null;
-  }
-
-  return sourceBranch || null;
+  if (rootBranch && branches.includes(rootBranch)) return rootBranch;
+  if (branches.includes('main')) return 'main';
+  if (branches.includes('master')) return 'master';
+  return branches[0] ?? '';
 };
 
-export const resolveWorktreeSourceBranchPreference = ({
-  branches,
-  savedSourceBranch,
-  rootBranch,
-}: WorktreeSourceBranchPreferenceArgs): WorktreeSourceBranchPreferenceResult => {
-  const savedSourceBranchIsValid = Boolean(savedSourceBranch && branches.includes(savedSourceBranch));
-
-  if (savedSourceBranchIsValid && savedSourceBranch) {
-    return {
-      sourceBranch: savedSourceBranch,
-      shouldClearSavedSourceBranch: false,
-    };
-  }
-
-  const sourceBranch = rootBranch && branches.includes(rootBranch)
-    ? rootBranch
-    : branches.includes('main')
-      ? 'main'
-      : branches.includes('master')
-        ? 'master'
-        : branches[0] ?? '';
-
-  return {
-    sourceBranch,
-    shouldClearSavedSourceBranch: Boolean(savedSourceBranch),
-  };
+export const resolveBranchOnTopSource = (branches: readonly string[], branch: string): string => {
+  if (branches.includes(branch)) return branch;
+  if (branches.includes(`remotes/origin/${branch}`)) return `remotes/origin/${branch}`;
+  return branches.find((candidate) => candidate.startsWith('remotes/') && candidate.split('/').slice(2).join('/') === branch) ?? '';
 };

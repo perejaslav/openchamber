@@ -1,53 +1,59 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
+import type { IconName } from '@/components/icon/icons';
+import { useI18n } from '@/lib/i18n';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { cn } from '@/lib/utils';
 
-/**
- * Live-activity marker for one session row or aggregate: 'running' while the
- * turn streams (busy/retry), 'unread' while finished-but-unseen.
- *
- * The default is a static dot (info while running, success while unread) —
- * the cheapest possible indicator; motion lives in the 1 Hz elapsed counter
- * (see faa9c243). The opt-in `animatedActivityIndicators` preference swaps
- * the running dot for a `loader-4` spinner stepped to 20 fps
- * (`.activity-spinner`, VS Code's steps() throttling). The explicit local
- * preference controls spinner rendering across OpenChamber runtimes.
- */
+type SessionActivityIndicatorState = 'running' | 'workflow' | 'subagent' | 'shell' | 'image' | 'pullRequest' | 'extensionWait' | 'unread';
+
+const PRESENTATION = {
+  running: { icon: 'circle', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.active' },
+  workflow: { icon: 'flow-chart', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.workflowRunning' },
+  subagent: { icon: 'robot-2', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundSubagent' },
+  shell: { icon: 'terminal', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundCommand' },
+  image: { icon: 'image', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.backgroundImage' },
+  pullRequest: { icon: 'circle', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.waitingOnPullRequest' },
+  extensionWait: { icon: 'timer', colorClass: 'text-status-info', labelKey: 'sessions.sidebar.session.status.waitingOnExtension' },
+  unread: { icon: 'checkbox-circle', colorClass: 'text-status-success', labelKey: 'sessions.sidebar.session.status.unread' },
+} as const satisfies Record<SessionActivityIndicatorState, { icon: IconName; colorClass: string; labelKey: string }>;
+
 export const SessionActivityIndicator: React.FC<{
-  /** 'running' (busy/retry) or 'unread' (unseen activity on a settled turn). */
-  state: 'running' | 'unread';
-  /** Localized accessible label; also rendered as the hover title. */
-  label: string;
+  state: SessionActivityIndicatorState;
   className?: string;
-  /** Extra classes for the running dot only (e.g. the switcher's pulse). */
-  runningDotClassName?: string;
-}> = ({ state, label, className, runningDotClassName }) => {
+  runningClassName?: string;
+  tooltip?: boolean;
+}> = ({ state, className, runningClassName, tooltip = false }) => {
+  const { t } = useI18n();
   const animated = useSessionDisplayStore((s) => s.animatedActivityIndicators);
+  const presentation = PRESENTATION[state];
+  const label = t(presentation.labelKey);
+  const running = state !== 'unread';
 
-  if (state === 'running' && animated) {
-    return (
-      <span
-        className={cn('inline-flex shrink-0 items-center justify-center', className)}
-        aria-label={label}
-        title={label}
-        data-session-activity-indicator={state}
-      >
-        <Icon name="loader-4" className="activity-spinner h-3 w-3 text-status-info" />
-      </span>
-    );
-  }
-
-  return (
+  const mark = (
     <span
-      className={cn(
-        'h-1.5 w-1.5 shrink-0 rounded-full',
-        state === 'running' ? cn('bg-[var(--status-info)]', runningDotClassName) : 'bg-[var(--status-success)]',
-        className,
-      )}
+      className={cn('inline-flex shrink-0 items-center justify-center', className)}
       aria-label={label}
-      title={label}
+      title={tooltip ? undefined : label}
       data-session-activity-indicator={state}
-    />
+    >
+      {running && animated ? (
+        <Spinner className="h-3 w-3 text-status-info" />
+      ) : (
+        <Icon
+          name={presentation.icon}
+          className={cn('h-3 w-3', presentation.colorClass, running && runningClassName)}
+        />
+      )}
+    </span>
+  );
+  if (!tooltip) return mark;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{mark}</TooltipTrigger>
+      <TooltipContent side="top" sideOffset={6}>{label}</TooltipContent>
+    </Tooltip>
   );
 };

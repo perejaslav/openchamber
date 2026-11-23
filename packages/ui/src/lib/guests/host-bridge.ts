@@ -2,15 +2,21 @@ import {
   HostRequestError,
   type GuestStorageRequest,
   type GuestStorageResult,
+  type GuestStatusControl,
   type GuestWorkspaceQuery,
   type GuestWorkspaceSnapshot,
   type GuestWorkspaceSubscription,
+  type GuestShellsSubscription,
+  type GuestShellOutputRequest,
+  type GuestShellOutputResult,
+  type GuestShellStopResult,
   GUEST_SESSION_AGENT_MAX,
   GUEST_SESSION_MODEL_MAX,
   OPENCHAMBER_SDK_API_VERSION,
   OPENCHAMBER_SDK_CHANNEL,
   type AttachIssueRequest,
   type GuestItem,
+  type GuestPopoverRequest,
   type PromptRequest,
   type PromptResult,
   type SessionLifecycleEvent,
@@ -25,6 +31,7 @@ import {
   type HostReadyContext,
   type HostRequestErrorCode,
   type HostResultPayload,
+  type LateGenerateResult,
   type ResolveResultPayload,
   type SessionSnapshot,
   type StartSessionResult,
@@ -34,6 +41,8 @@ import {
 import type { GuestFileProxyResult, GuestFileRequest } from '@/lib/guests/files';
 import type { GuestGenerateProxyResult } from '@/lib/guests/generate';
 import type { GuestOpenCommitResult } from '@/lib/guests/open-commit';
+import type { GuestOpenSurfaceResult } from '@/lib/guests/open-surface';
+import type { GuestOpenWalkthroughResult } from '@/lib/guests/open-walkthrough';
 import type { GuestRequestProxyResult } from '@/lib/guests/oauth';
 
 import { isContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/modes';
@@ -42,11 +51,18 @@ type HostBridgeEffects = {
   workspaceRead: (query: GuestWorkspaceQuery) => GuestWorkspaceSnapshot;
   workspaceSubscribe: (subscription: GuestWorkspaceSubscription) => void;
   workspaceUnsubscribe: (subscriptionId: string) => void;
+  shellsSubscribe: (subscription: GuestShellsSubscription) => void;
+  shellsUnsubscribe: (subscriptionId: string) => void;
+  shellOutput: (request: GuestShellOutputRequest) => Promise<GuestShellOutputResult>;
+  shellStop: (request: { shellId: string }) => Promise<GuestShellStopResult>;
+  microphoneOpen: (sampleRate: number) => Promise<void>;
+  microphoneClose: () => void;
   storage: (request: GuestStorageRequest) => Promise<GuestStorageResult>;
+  setStatusControls: (controls: GuestStatusControl[]) => void;
   openSession: (sessionId: string) => void;
   toast: (request: ToastRequest) => void;
   openUrl: (url: string) => Promise<boolean>;
-  openSurface: (mode: ContextPanelMode) => void;
+  openSurface: (mode: ContextPanelMode) => GuestOpenSurfaceResult;
   writeClipboard: (text: string) => Promise<boolean>;
   compose: (text: string, mode: 'replace' | 'append') => void;
   attach: (issue: AttachIssueRequest) => void;
@@ -72,18 +88,17 @@ type HostBridgeEffects = {
     | { ok: true; result: { status: import('@openchamber/sdk').ServiceStatus } }
     | { ok: false; code: HostRequestErrorCode; message: string }
   >;
-  /** One handler for read, write, list, and stat; the pane checks scope and grant, the server does the rest. */
   file: (request: GuestFileRequest) => Promise<GuestFileProxyResult>;
-  /** One-off Small Model text generation; the pane checks the `model` grant, the server picks and calls the model. */
   generate: (request: GenerateRequest) => Promise<GuestGenerateProxyResult>;
-  /** Rail badge for this guest; `null` clears. */
   setBadge: (count: number | null) => void;
-  /** Show a commit of the open project in the Diff view; the pane owns directory and runtime support. */
   openCommit: (sha: string) => Promise<GuestOpenCommitResult>;
-  /** Content height the guest asked for; only the Work Status section sizes its frame from it. */
+  openWalkthrough: (base: string) => Promise<GuestOpenWalkthroughResult>;
   resize: (height: number) => void;
-  /** The guest answered a host `resolve` with this id. Not a request, so no `result` goes back. */
+  answerBlock: (text: string) => Promise<void>;
   resolveResult: (id: string, payload: ResolveResultPayload) => void;
+  openPopover?: (request: GuestPopoverRequest) => void;
+  closePopover?: (id: string, reason: 'closed' | 'escape' | undefined) => void;
+  setPopoverAnchorActive?: (id: string, active: boolean) => void;
 };
 
 export const buildReadyMessage = (payload: HostReadyContext): HostMessage => ({
@@ -136,6 +151,13 @@ export const buildResolveMessage = (id: string, command: string, args: string): 
   payload: { command, args },
 });
 
+export const buildGenerateLateMessage = (result: LateGenerateResult): HostMessage => ({
+  channel: OPENCHAMBER_SDK_CHANNEL,
+  v: OPENCHAMBER_SDK_API_VERSION,
+  type: 'generate-late',
+  payload: result,
+});
+
 export const buildSessionLifecycleMessage = (event: SessionLifecycleEvent): HostMessage => ({
   channel: OPENCHAMBER_SDK_CHANNEL,
   v: OPENCHAMBER_SDK_API_VERSION,
@@ -158,7 +180,7 @@ export const guestSessionLifecyclePhase = (
   return null;
 };
 
-export type GuestSessionSource = {
+type GuestSessionSource = {
   id: string;
   title?: string | null;
   busy?: boolean;
@@ -244,16 +266,22 @@ export const answerGuestMessage = async (
     case 'workspace-read': return okResult(message.id, effects.workspaceRead(message.payload));
     case 'workspace-subscribe': effects.workspaceSubscribe(message.payload); return okResult(message.id);
     case 'workspace-unsubscribe': effects.workspaceUnsubscribe(message.payload.subscriptionId); return okResult(message.id);
+    case 'shells-subscribe': effects.shellsSubscribe(message.payload); return okResult(message.id);
+    case 'shells-unsubscribe': effects.shellsUnsubscribe(message.payload.subscriptionId); return okResult(message.id);
+    case 'shell-output': return okResult(message.id, await effects.shellOutput(message.payload));
+    case 'shell-stop': return okResult(message.id, await effects.shellStop(message.payload));
+    case 'microphone-open': await effects.microphoneOpen(message.payload.sampleRate); return okResult(message.id, { opened: true });
+    case 'microphone-close': effects.microphoneClose(); return okResult(message.id);
     case 'storage': return okResult(message.id, await effects.storage(message.payload));
+    case 'status-controls': effects.setStatusControls(message.payload.controls); return okResult(message.id);
     case 'open-session': effects.openSession(message.payload.sessionId); return okResult(message.id);
-    // No answer: the pane handles these itself. File editor traffic belongs to
-    // its file channel, not to a request/result pair.
     case 'hello':
     case 'action-result':
     case 'file-snapshot-result':
     case 'file-change':
     case 'file-save':
     case 'file-unsupported':
+    case 'generate-late-listen':
       return null;
     case 'toast':
       effects.toast(message.payload);
@@ -265,12 +293,17 @@ export const answerGuestMessage = async (
       const opened = await effects.openUrl(message.payload.url);
       return opened ? okResult(message.id) : errorResult(message.id, 'Could not open URL.');
     }
+    case 'block-answer':
+      return effects.answerBlock(message.payload.text).then(
+        () => okResult(message.id),
+        (error: Error) => errorResult(message.id, error.message, 'HOST_REJECTED'),
+      );
     case 'open-surface': {
       if (!isContextPanelMode(message.payload.surfaceId)) {
         return errorResult(message.id, 'Unknown surface.');
       }
-      effects.openSurface(message.payload.surfaceId);
-      return okResult(message.id);
+      const opened = effects.openSurface(message.payload.surfaceId);
+      return opened.ok ? okResult(message.id) : errorResult(message.id, opened.message, opened.code);
     }
     case 'clipboard-write': {
       const copied = await effects.writeClipboard(message.payload.text);
@@ -370,12 +403,28 @@ export const answerGuestMessage = async (
       const opened = await effects.openCommit(message.payload.sha);
       return opened.ok ? okResult(message.id) : errorResult(message.id, opened.message, opened.code);
     }
+    case 'open-walkthrough': {
+      const opened = await effects.openWalkthrough(message.payload.base);
+      return opened.ok ? okResult(message.id) : errorResult(message.id, opened.message, opened.code);
+    }
     case 'resize':
       effects.resize(message.payload.height);
       return okResult(message.id);
     case 'resolve-result':
       effects.resolveResult(message.id, message.payload);
       return null;
+    case 'popover-open':
+      if (!effects.openPopover) return errorResult(message.id, 'This host does not support popovers.', 'UNSUPPORTED');
+      effects.openPopover(message.payload);
+      return okResult(message.id);
+    case 'popover-close':
+      if (!effects.closePopover) return errorResult(message.id, 'This host does not support popovers.', 'UNSUPPORTED');
+      effects.closePopover(message.payload.id, message.payload.reason);
+      return okResult(message.id);
+    case 'popover-anchor':
+      if (!effects.setPopoverAnchorActive) return errorResult(message.id, 'This host does not support popovers.', 'UNSUPPORTED');
+      effects.setPopoverAnchorActive(message.payload.id, message.payload.active);
+      return okResult(message.id);
   }
   } catch (error) {
     if (!('id' in message)) return null;

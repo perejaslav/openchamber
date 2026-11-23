@@ -54,6 +54,26 @@ describe('host theme application', () => {
     expect(seen.get('color')).toBe(theme.tokens.foreground);
   });
 
+  test('takes the host body text as the frame text size, and the old default from a host without one', () => {
+    const { root, seen } = captureRoot();
+    applyHostTheme({ ...theme, tokens: { ...theme.tokens, fontSize: '18.2px' } }, root);
+    expect(seen.get('font-size')).toBe('18.2px');
+    applyHostTheme(theme, root);
+    expect(seen.get('font-size')).toBe('0.875rem');
+  });
+
+  test('applies optional syntax tokens and clears stale values from older snapshots', () => {
+    const { root, seen } = captureRoot();
+    applyHostTheme({ ...theme, tokens: { ...theme.tokens, syntaxKeyword: '#aabbcc', syntaxComment: '#778899' } }, root);
+    expect(seen.get('--oc-syntax-keyword')).toBe('#aabbcc');
+    expect(seen.get('--syntax-keyword')).toBe('#aabbcc');
+    expect(seen.get('--oc-syntax-comment')).toBe('#778899');
+    applyHostTheme(theme, root);
+    expect(seen.get('--oc-syntax-keyword')).toBe('');
+    expect(seen.get('--syntax-keyword')).toBe('');
+    expect(seen.get('--oc-syntax-comment')).toBe('');
+  });
+
   test('applyHostReady stamps the host surface on the root', () => {
     const { root } = captureRoot();
     applyHostReady({ theme, surface: 'dialog' }, root);

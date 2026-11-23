@@ -16,7 +16,8 @@ import {
   parseInstallRequest,
   uninstallGuest,
 } from './install.js';
-import { guestCopiesDir } from './persist.js';
+import { guestCopiesDir, readExtensionStore } from './persist.js';
+import { guestDataDir, runGuestStorage } from './storage.js';
 
 const writeGuest = async (root, id) => {
   await fs.mkdir(path.join(root, 'panel'), { recursive: true });
@@ -61,6 +62,9 @@ describe('installGuestFromPath', () => {
 
     const listed = await listInstalledGuests({ persistPath });
     expect(listed.some((guest) => guest.id === 'clone-hello')).toBe(true);
+    const firstStorageId = (await readExtensionStore(persistPath)).storageIds['clone-hello'];
+    expect(firstStorageId).toMatch(/^[0-9a-f-]{36}$/);
+    await runGuestStorage(persistPath, 'clone-hello', { op: 'set', key: 'kept', value: 1 }, async () => {});
 
     const again = await installGuestFromPath(guestRoot, persistPath);
     expect(again).toEqual({ ok: false, code: 'already-installed', id: 'clone-hello' });
@@ -71,6 +75,7 @@ describe('installGuestFromPath', () => {
       throw new Error('expected replace');
     }
     expect(replacedSame.replaced).toBe(true);
+    expect((await readExtensionStore(persistPath)).storageIds['clone-hello']).toBe(firstStorageId);
 
     const otherRoot = path.join(dir, 'other');
     await writeGuest(otherRoot, 'clone-hello');
@@ -84,6 +89,8 @@ describe('installGuestFromPath', () => {
     }
     expect(replacedOther.replaced).toBe(true);
     expect(replacedOther.guest.path).toBe(await fs.realpath(otherRoot));
+    expect((await readExtensionStore(persistPath)).storageIds['clone-hello']).toBe(firstStorageId);
+    expect(await runGuestStorage(persistPath, 'clone-hello', { op: 'get', key: 'kept' }, async () => {})).toMatchObject({ found: false });
 
     const relative = await installGuestFromPath('clone', persistPath);
     expect(relative).toEqual({ ok: false, code: 'invalid-path' });
@@ -91,12 +98,26 @@ describe('installGuestFromPath', () => {
     const badIdRoot = path.join(dir, 'bad-id');
     await writeGuest(badIdRoot, 'Not Kebab');
     const badId = await installGuestFromPath(badIdRoot, persistPath);
-    expect(badId).toEqual({ ok: false, code: 'invalid-manifest' });
+    // The parser's reason travels with the refusal, so the author learns which field broke.
+    expect(badId).toEqual({ ok: false, code: 'invalid-manifest', reason: expect.stringContaining('kebab-case') });
+
+    const serviceFile = path.join(guestDataDir(persistPath, 'clone-hello'), 'state.json');
+    await fs.mkdir(path.dirname(serviceFile), { recursive: true });
+    await fs.writeFile(serviceFile, '{}');
+    expect(await uninstallGuest('clone-hello', persistPath, { preserveStorageId: true })).toEqual({ ok: true });
+    await expect(fs.stat(serviceFile)).resolves.toBeTruthy();
+    expect((await installGuestFromPath(otherRoot, persistPath)).ok).toBe(true);
 
     const removed = await uninstallGuest('clone-hello', persistPath);
     expect(removed).toEqual({ ok: true });
+    await expect(fs.stat(path.dirname(serviceFile))).rejects.toMatchObject({ code: 'ENOENT' });
     const after = await listInstalledGuests({ persistPath });
     expect(after.some((guest) => guest.id === 'clone-hello')).toBe(false);
+    expect((await readExtensionStore(persistPath)).storageIds?.['clone-hello']).toBeUndefined();
+
+    const reinstalled = await installGuestFromPath(otherRoot, persistPath);
+    expect(reinstalled.ok).toBe(true);
+    expect((await readExtensionStore(persistPath)).storageIds['clone-hello']).not.toBe(firstStorageId);
 
     const missing = await uninstallGuest('hello', persistPath);
     expect(missing).toEqual({ ok: false, code: 'not-found' });

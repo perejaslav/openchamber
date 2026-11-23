@@ -17,6 +17,12 @@ describe('OpenCode upgrade capability', () => {
     });
   });
 
+  it('upgrades the CLI behind a shared service unless the administrator pins it', () => {
+    const input = { isExternal: true, isSharedService: true, hasManagedProcess: false, activeBinary: null, isBundledBinary: () => false };
+    expect(resolveOpenCodeUpgradeCapability(input)).toEqual({ supported: true, manager: 'opencode', reason: null });
+    expect(resolveOpenCodeUpgradeCapability({ ...input, pinnedByPolicy: true })).toMatchObject({ supported: false });
+  });
+
   it('never upgrades external or unresolved runtimes', () => {
     const isBundledBinary = vi.fn(() => false);
 
@@ -39,6 +45,20 @@ describe('OpenCode upgrade capability', () => {
       supported: false,
       manager: null,
       reason: 'unavailable',
+    });
+  });
+
+  it('leaves a binary pinned by the policy file to the administrator', () => {
+    expect(resolveOpenCodeUpgradeCapability({
+      isExternal: false,
+      hasManagedProcess: true,
+      activeBinary: '/opt/acme/opencode',
+      isBundledBinary: () => false,
+      pinnedByPolicy: true,
+    })).toEqual({
+      supported: false,
+      manager: 'administrator',
+      reason: 'policy',
     });
   });
 

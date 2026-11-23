@@ -1,16 +1,36 @@
 import React from 'react';
 import type { PermissionReply, PermissionRequest } from '@/types/permission';
-import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useChatColumnActions, useChatSessionSelection } from './chatColumnSession';
 import { useSessions } from '@/sync/sync-context';
 import * as sessionActions from '@/sync/session-actions';
+import { canSavePermission } from './permissionSummary';
+import { eventMatchesShortcut, getEffectiveShortcutCombo, type ShortcutActionId } from '@/lib/shortcuts';
+import { useUIStore } from '@/stores/useUIStore';
 
-// Newest pending card owns the keyboard; older cards wait their turn.
-const activePermissionCardIds: string[] = [];
+type ColumnKind = 'main' | 'pinned';
 
-/** The request was raised by a child of the session the user is looking at. */
+const activePermissionCards: Array<{ id: string; column: ColumnKind }> = [];
+
+const columnOfEvent = (event: KeyboardEvent): ColumnKind => (
+  event.target instanceof Element && event.target.closest('[data-chat-column="pinned"]') ? 'pinned' : 'main'
+);
+
+export const permissionShortcutReply = (
+  event: KeyboardEvent,
+  canSave: boolean,
+  overrides?: Record<string, string>,
+): PermissionReply | null => {
+  const pressed = (actionId: ShortcutActionId) => (
+    eventMatchesShortcut(event, getEffectiveShortcutCombo(actionId, overrides))
+  );
+  if (pressed('permission_allow_once')) return 'once';
+  if (pressed('permission_deny')) return 'reject';
+  return canSave && pressed('permission_allow_always') ? 'always' : null;
+};
+
 export const usePermissionFromSubagent = (permission: PermissionRequest): boolean => {
-  const sessions = useSessions();
-  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
+  const { sessionId: currentSessionId, directory: currentSessionDirectory } = useChatSessionSelection();
+  const sessions = useSessions(currentSessionDirectory ?? undefined);
   return React.useMemo(() => {
     if (!currentSessionId || permission.sessionID === currentSessionId) return false;
     const sourceSession = sessions.find((session) => session.id === permission.sessionID);
@@ -18,18 +38,15 @@ export const usePermissionFromSubagent = (permission: PermissionRequest): boolea
   }, [permission.sessionID, currentSessionId, sessions]);
 };
 
-/**
- * Replies to one request and owns its keyboard shortcuts while it is the
- * newest pending one: Alt+Enter allows once, Alt+Shift+Enter always,
- * Alt+Backspace denies. Shared by the inline card and the dock.
- */
 export const usePermissionResponse = (
   permission: PermissionRequest,
   onResponse?: (response: PermissionReply) => void,
 ) => {
+  const column: ColumnKind = useChatColumnActions().pinned ? 'pinned' : 'main';
   const [isResponding, setIsResponding] = React.useState(false);
   const [hasResponded, setHasResponded] = React.useState(false);
   const respondToPermission = sessionActions.respondToPermission;
+  const canSave = canSavePermission(permission.save);
 
   const respond = React.useCallback(async (response: PermissionReply) => {
     setIsResponding(true);
@@ -49,15 +66,16 @@ export const usePermissionResponse = (
 
   React.useEffect(() => {
     if (hasResponded) return;
-    activePermissionCardIds.push(permission.id);
+    const card = { id: permission.id, column };
+    activePermissionCards.push(card);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (activePermissionCardIds.at(-1) !== permission.id) return;
-      if (!event.altKey || event.metaKey || event.ctrlKey) return;
-      const response = event.key === 'Enter'
-        ? (event.shiftKey ? 'always' as const : 'once' as const)
-        : event.key === 'Backspace' && !event.shiftKey
-          ? 'reject' as const
-          : null;
+      const target = columnOfEvent(event);
+      let owner: typeof card | undefined;
+      for (const entry of activePermissionCards) {
+        if (entry.column === target) owner = entry;
+      }
+      if (owner !== card) return;
+      const response = permissionShortcutReply(event, canSave, useUIStore.getState().shortcutOverrides);
       if (!response) return;
       event.preventDefault();
       event.stopPropagation();
@@ -66,10 +84,10 @@ export const usePermissionResponse = (
     window.addEventListener('keydown', handleKeyDown, true);
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
-      const index = activePermissionCardIds.lastIndexOf(permission.id);
-      if (index !== -1) activePermissionCardIds.splice(index, 1);
+      const index = activePermissionCards.lastIndexOf(card);
+      if (index !== -1) activePermissionCards.splice(index, 1);
     };
-  }, [hasResponded, permission.id]);
+  }, [canSave, column, hasResponded, permission.id]);
 
   return { isResponding, hasResponded, respond };
 };

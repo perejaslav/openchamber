@@ -1,16 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
-import { CONTEXT_METADATA_KEY, contextPayloadFromDraft } from '@/lib/messages/contextParts';
-import type { QueuedContextPart } from '@/stores/messageQueueStore';
+import { CONTEXT_METADATA_KEY, contextPayloadFromDraft, readContextPart } from '@/lib/messages/contextParts';
+import type { QueuedContextPart, QueuedMessage } from '@/stores/messageQueueStore';
 import {
     buildComposerContext,
     buildOutgoingMessage,
+    expandCommentSnippets,
     queuedContextToParts,
+    selectComposerQueue,
     type ComposerContextInput,
     type OutgoingMessageDeps,
     type OutgoingMessageInput,
@@ -44,11 +43,17 @@ const input = (overrides: Partial<OutgoingMessageInput> = {}): OutgoingMessageIn
     composerAttachments: [],
     inlineComments: [],
     syntheticTexts: [],
-    linkedIssue: null,
-    linkedPr: null,
-    linkedLinearIssue: null,
-    linkedGuestIssue: null,
+    references: [],
     ...overrides,
+});
+
+describe('a share link in the text', () => {
+    test('leaves without its key, in the composer text and in queued text', () => {
+        const link = 'https://share.openchamber.dev/p/AbCdEfGhIjKlMnOpQrStUv';
+        const out = buildOutgoingMessage(input({ composerText: `[pick](${link}#Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE)`, queued: [{ text: `${link}#Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE` }] }), deps());
+        expect(out.primaryText).not.toContain('Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9vYmFyYmE');
+        expect(out.primaryText).toContain(`[pick](${link})`);
+    });
 });
 
 describe('the composer text alone', () => {
@@ -82,13 +87,47 @@ describe('the composer text alone', () => {
     });
 });
 
+describe('manual queue projection', () => {
+    const ordinary: QueuedMessage = {
+        id: 'ordinary', content: 'User follow up', text: 'User follow up', createdAt: 1,
+        sendConfig: { providerID: 'openai', modelID: 'chosen', agent: 'plan' },
+    };
+    const scheduled: QueuedMessage = {
+        id: 'scheduled', content: 'Scheduled follow up', text: 'Scheduled follow up', createdAt: 1,
+        scheduledTask: { projectId: 'project-1', taskId: 'task-1' },
+    };
+
+    for (const sendConfig of [undefined, { providerID: 'other', modelID: 'other' }]) {
+        test(`a scheduled head with ${sendConfig ? 'explicit' : 'inherited'} selection does not supply config or text to mixed send-all`, () => {
+            const projection = selectComposerQueue([{ ...scheduled, sendConfig }, ordinary]);
+            expect(projection).toEqual([ordinary]);
+            expect(projection[0]?.sendConfig).toBe(ordinary.sendConfig);
+            const outgoing = buildOutgoingMessage(input({ queued: projection, composerText: 'Typed now' }), deps());
+            expect(outgoing.primaryText).toBe('User follow up\n\nTyped now');
+            expect(outgoing.additionalParts).toEqual([]);
+        });
+    }
+
+    test('a scheduled-only queue has no manual sendable content', () => {
+        const projection = selectComposerQueue([scheduled]);
+        expect(projection.length).toBe(0);
+        expect(projection[0]?.sendConfig).toBeUndefined();
+        expect(buildOutgoingMessage(input({ queued: projection }), deps()).isEmpty).toBe(true);
+    });
+
+    test('ordinary queues keep their original items, order and identity', () => {
+        const queue = [ordinary, { ...ordinary, id: 'second' }];
+        expect(selectComposerQueue(queue)).toBe(queue);
+    });
+});
+
 describe('queued messages', () => {
-    test('the oldest becomes primary and the rest follow in order', () => {
+    test('all of them share the visible message, oldest first', () => {
         const result = buildOutgoingMessage(input({
             queued: [{ text: 'first' }, { text: 'second' }, { text: 'third' }],
         }), deps());
-        expect(result.primaryText).toBe('first');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['second', 'third']);
+        expect(result.primaryText).toBe('first\n\nsecond\n\nthird');
+        expect(result.additionalParts).toEqual([]);
     });
 
     test('the composer text lands after everything queued', () => {
@@ -96,12 +135,21 @@ describe('queued messages', () => {
             queued: [{ text: 'queued' }],
             composerText: 'typed now',
         }), deps());
-        expect(result.primaryText).toBe('queued');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['typed now']);
+        expect(result.primaryText).toBe('queued\n\ntyped now');
+        expect(result.additionalParts).toEqual([]);
     });
 
-    test('the context a message was queued with follows it, before the next message', () => {
-        const metadata = { [CONTEXT_METADATA_KEY]: { kind: 'github-issue' as const, number: 3, title: 'Bug', url: 'https://x/issues/3' } };
+    test('an attachment-only queued message adds no blank paragraph', () => {
+        const result = buildOutgoingMessage(input({
+            queued: [{ text: '', attachments: [attachment('pic')] }],
+            composerText: 'typed now',
+        }), deps());
+        expect(result.primaryText).toBe('typed now');
+        expect(result.primaryAttachments.map((a) => a.id)).toEqual(['pic']);
+    });
+
+    test('the context each message was queued with is sent in queue order', () => {
+        const metadata = { [CONTEXT_METADATA_KEY]: { kind: 'repository-issue' as const, number: 3, title: 'Bug', url: 'https://x/issues/3' } };
         const result = buildOutgoingMessage(input({
             queued: [
                 { text: 'first', context: [{ kind: 'context', text: 'issue body', metadata }, { kind: 'instruction', text: 'use: deploy' }] },
@@ -109,8 +157,8 @@ describe('queued messages', () => {
             ],
             composerText: 'typed now',
         }), deps());
-        expect(result.primaryText).toBe('first');
-        expect(result.additionalParts.map((p) => p.text)).toEqual(['issue body', 'use: deploy', 'second', 'typed now']);
+        expect(result.primaryText).toBe('first\n\nsecond\n\ntyped now');
+        expect(result.additionalParts.map((p) => p.text)).toEqual(['issue body', 'use: deploy']);
         expect(result.additionalParts[0]).toEqual({ text: 'issue body', synthetic: true, metadata });
         expect(result.additionalParts[1]).toEqual({ text: 'use: deploy', synthetic: true });
     });
@@ -125,15 +173,17 @@ describe('queued messages', () => {
         expect(result.additionalParts).toEqual([]);
     });
 
-    test('each queued message keeps its own attachments', () => {
+    test('every attachment rides the visible message, in order', () => {
         const result = buildOutgoingMessage(input({
             queued: [
                 { text: 'a', attachments: [attachment('one')] },
                 { text: 'b', attachments: [attachment('two')] },
             ],
+            composerText: 'c',
+            composerAttachments: [attachment('three')],
         }), deps());
-        expect(result.primaryAttachments.map((a) => a.id)).toEqual(['one']);
-        expect(result.additionalParts[0].attachments?.map((a) => a.id)).toEqual(['two']);
+        expect(result.primaryAttachments.map((a) => a.id)).toEqual(['one', 'two', 'three']);
+        expect(result.additionalParts).toEqual([]);
     });
 });
 
@@ -192,7 +242,7 @@ describe('context drafts', () => {
             .toEqual(contextPayloadFromDraft(commentDraft()));
         expect(result.additionalParts[1].metadata?.[CONTEXT_METADATA_KEY])
             .toEqual(contextPayloadFromDraft(commentDraft({ id: 'icd-2', source: 'file', side: undefined })));
-        expect(result.additionalParts[0].text).toContain('Comment on `src/app.ts` lines 3-5 (modified):');
+        expect(result.additionalParts[0].text).toContain('The user selected `src/app.ts` lines 3-5 (modified):');
         expect(result.additionalParts[0].text).toContain('fix this');
     });
 
@@ -202,7 +252,7 @@ describe('context drafts', () => {
             inlineComments: [commentDraft()],
             syntheticTexts: ['conflict note'],
         }), deps());
-        expect(result.additionalParts.map((p) => p.text.startsWith('Comment on') ? 'comment' : p.text))
+        expect(result.additionalParts.map((p) => p.text.startsWith('The user selected') ? 'comment' : p.text))
             .toEqual(['comment', 'conflict note']);
     });
 
@@ -213,50 +263,51 @@ describe('context drafts', () => {
 });
 
 describe('synthetic context', () => {
-    test('a linked PR sends its instructions before its diff', () => {
+    test('a linked PR is sent as its context only, with no instructions guessing the intent', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'review this',
-            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'how to read it', context: 'the diff' },
+            references: [{ kind: 'change-request', provider: 'gitlab', number: 7, title: 'MR', url: 'https://x/mr/7', context: 'the diff' }],
         }), deps());
-        expect(result.additionalParts.map((p) => p.text))
-            .toEqual(['how to read it', 'the diff']);
+        expect(result.additionalParts.map((p) => p.text)).toEqual(['the diff']);
         expect(result.additionalParts.every((p) => p.synthetic)).toBe(true);
-        expect(result.additionalParts[1].metadata?.[CONTEXT_METADATA_KEY])
-            .toEqual({ kind: 'github-pr', number: 7, title: 'PR', url: 'https://x/pr/7' });
+        // The provider rides the metadata, so the message shows `MR !7`.
+        expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY])
+            .toEqual({ kind: 'change-request', provider: 'gitlab', number: 7, title: 'MR', url: 'https://x/mr/7' });
     });
 
     test('a linked issue is sent as context', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'fix it',
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' },
+            references: [{ kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' }],
         }), deps());
         expect(result.additionalParts).toHaveLength(1);
         expect(result.additionalParts[0].text).toBe('issue body');
         expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY])
-            .toEqual({ kind: 'github-issue', number: 3, title: 'Bug', url: 'https://x/issues/3' });
+            .toEqual({ kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3' });
     });
 
-    test('a linked Linear issue is sent as context', () => {
+    test('a linked tracker item is sent as context', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'fix it',
-            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear body' },
+            references: [{ kind: 'tracker-item', provider: 'linear', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear body' }],
         }), deps());
         expect(result.additionalParts).toHaveLength(1);
         expect(result.additionalParts[0].text).toBe('linear body');
         expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY])
-            .toEqual({ kind: 'linear-issue', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12' });
+            .toEqual({ kind: 'tracker-item', provider: 'linear', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12' });
     });
 
     test('a linked guest issue is sent as context', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'fix it',
-            linkedGuestIssue: {
+            references: [{
+                kind: 'guest',
                 providerId: 'hello',
                 id: 'HELLO-1',
                 title: 'Sample ticket',
                 url: 'https://example.com/HELLO-1',
                 contextText: 'guest body',
-            },
+            }],
         }), deps());
         expect(result.additionalParts).toHaveLength(1);
         expect(result.additionalParts[0].text).toBe('guest body');
@@ -274,14 +325,15 @@ describe('synthetic context', () => {
         const data = { status: 'open', comments: ['hi'] };
         const result = buildOutgoingMessage(input({
             composerText: 'fix it',
-            linkedGuestIssue: {
+            references: [{
+                kind: 'guest',
                 providerId: 'hello',
                 id: 'HELLO-1',
                 title: 'Sample ticket',
                 url: 'https://example.com/HELLO-1',
                 contextText: 'guest body',
                 data,
-            },
+            }],
         }), deps());
         expect(result.additionalParts[0].text).toBe('guest body');
         expect(result.additionalParts[0].metadata?.[CONTEXT_METADATA_KEY]).toMatchObject({ kind: 'guest-issue', data });
@@ -290,14 +342,15 @@ describe('synthetic context', () => {
     test('a linked guest pull is sent as guest-pr context', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'fix it',
-            linkedGuestIssue: {
+            references: [{
+                kind: 'guest',
                 providerId: 'gitlab',
                 id: '!12',
                 title: 'Fix login',
                 url: 'https://gitlab.com/acme/app/-/merge_requests/12',
                 contextText: 'guest pr body',
                 thread: 'pull',
-            },
+            }],
         }), deps());
         expect(result.additionalParts).toHaveLength(1);
         expect(result.additionalParts[0].text).toBe('guest pr body');
@@ -315,7 +368,7 @@ describe('synthetic context', () => {
         const result = buildOutgoingMessage(input({
             composerText: 'x',
             syntheticTexts: ['conflict note'],
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' },
+            references: [{ kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' }],
         }), deps());
         expect(result.additionalParts.map((p) => p.text))
             .toEqual(['conflict note', 'issue body']);
@@ -346,7 +399,7 @@ describe('synthetic context', () => {
 
     test('context alone is still worth sending', () => {
         const result = buildOutgoingMessage(input({
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' },
+            references: [{ kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue body' }],
         }), deps());
         expect(result.isEmpty).toBe(false);
     });
@@ -360,24 +413,38 @@ describe('synthetic context', () => {
     });
 });
 
+describe('several references', () => {
+    test('each becomes its own context part, in the order they were attached', () => {
+        const result = buildOutgoingMessage(input({
+            composerText: 'compare',
+            references: [
+                { kind: 'tracker-item', provider: 'linear', identifier: 'ENG-1', title: 'A', url: 'https://linear.app/x/issue/ENG-1', contextText: 'linear' },
+                { kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue 3' },
+                { kind: 'repository-issue', number: 4, title: 'Bug', url: 'https://x/issues/4', contextText: 'issue 4' },
+                { kind: 'guest', providerId: 'jira', id: 'OPS-2', title: 'Ops', url: 'https://jira/OPS-2', contextText: 'jira' },
+            ],
+        }), deps());
+        expect(result.additionalParts.map((p) => p.text)).toEqual(['linear', 'issue 3', 'issue 4', 'jira']);
+    });
+});
+
 describe('full assembly order', () => {
     test('queued, then typed, then synthetic, then references', () => {
         const result = buildOutgoingMessage(input({
             queued: [{ text: 'q1' }, { text: 'q2' }],
             composerText: 'typed /deploy',
             syntheticTexts: ['synthetic'],
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
-            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
-            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
+            references: [
+                { kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
+                { kind: 'change-request', provider: 'github', number: 7, title: 'PR', url: 'https://x/pr/7', context: 'pr-diff' },
+                { kind: 'tracker-item', provider: 'linear', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
+            ],
         }), deps());
 
-        expect(result.primaryText).toBe('q1');
+        expect(result.primaryText).toBe('q1\n\nq2\n\ntyped /deploy');
         expect(result.additionalParts.map((p) => p.text)).toEqual([
-            'q2',
-            'typed /deploy',
             'synthetic',
             'issue',
-            'pr-how',
             'pr-diff',
             'linear',
         ]);
@@ -389,126 +456,87 @@ describe('capturing composer context for the queue', () => {
     const contextInput = (overrides: Partial<ComposerContextInput> = {}): ComposerContextInput => ({
         inlineComments: [],
         syntheticTexts: [],
-        linkedIssue: null,
-        linkedPr: null,
-        linkedLinearIssue: null,
-        linkedGuestIssue: null,
+        references: [],
         ...overrides,
     });
 
-    test('captures everything attached, in send order, with the skill instruction last', () => {
+    test('captures everything attached, in send order', () => {
         const context = buildComposerContext(contextInput({
             inlineComments: [commentDraft()],
             syntheticTexts: ['conflict note'],
-            linkedIssue: { number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
-            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
-            linkedLinearIssue: { identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
-        }), 'use: deploy');
+            references: [
+                { kind: 'repository-issue', number: 3, title: 'Bug', url: 'https://x/issues/3', contextText: 'issue' },
+                { kind: 'change-request', provider: 'github', number: 7, title: 'PR', url: 'https://x/pr/7', context: 'pr-diff' },
+                { kind: 'tracker-item', provider: 'linear', identifier: 'ENG-12', title: 'Login', url: 'https://linear.app/x/issue/ENG-12', contextText: 'linear' },
+            ],
+        }));
 
-        expect(context.map((part) => part.kind)).toEqual(['context', 'synthetic', 'context', 'context', 'context', 'instruction']);
+        expect(context.map((part) => part.kind)).toEqual(['context', 'synthetic', 'context', 'context', 'context']);
         expect(context[0]?.kind).toBe('context');
-        expect(context[0]?.text).toContain('Comment on `src/app.ts` lines 3-5 (modified):');
+        expect(context[0]?.text).toContain('The user selected `src/app.ts` lines 3-5 (modified):');
         expect(context[0]?.kind === 'context' ? context[0].metadata[CONTEXT_METADATA_KEY] : null)
             .toEqual(contextPayloadFromDraft(commentDraft()));
         expect(context[3]).toEqual({
             kind: 'context',
             text: 'pr-diff',
-            instructions: 'pr-how',
-            metadata: { [CONTEXT_METADATA_KEY]: { kind: 'github-pr', number: 7, title: 'PR', url: 'https://x/pr/7' } },
+            metadata: { [CONTEXT_METADATA_KEY]: { kind: 'change-request', provider: 'github', number: 7, title: 'PR', url: 'https://x/pr/7' } },
         });
-        expect(context.at(-1)).toEqual({ kind: 'instruction', text: 'use: deploy' });
+    });
+
+    test('change request source links survive queue capture and read-back without changing model text', () => {
+        const sourceLinks = ['https://portal.example/review/42', 'https://portal.example/changes/42'];
+        const reference = { kind: 'change-request' as const, provider: 'gitlab' as const, number: 42, title: 'MR', url: 'https://gitlab.com/group/app/-/merge_requests/42', context: 'body and diff', sourceLinks };
+        const captured = buildComposerContext(contextInput({ references: [reference] }));
+        const [part] = queuedContextToParts(captured);
+        expect(part.text).toBe('body and diff');
+        expect(readContextPart(part)).toEqual({ kind: 'change-request', provider: 'gitlab', number: 42, title: 'MR', url: reference.url, sourceLinks });
+        const direct = buildOutgoingMessage(input({ composerText: sourceLinks.join(' '), references: [reference] }), deps());
+        expect(direct.additionalParts).toEqual([part]);
+    });
+
+    test('a message queued with instructions before they were dropped still delivers them first', () => {
+        const metadata = { [CONTEXT_METADATA_KEY]: { kind: 'change-request' as const, provider: 'github' as const, number: 7, title: 'PR', url: 'https://x/pr/7' } };
+        expect(queuedContextToParts([{ kind: 'context', text: 'pr-diff', instructions: 'pr-how', metadata }])).toEqual([
+            { text: 'pr-how', synthetic: true },
+            { text: 'pr-diff', synthetic: true, metadata },
+        ]);
     });
 
     test('nothing attached captures nothing', () => {
-        expect(buildComposerContext(contextInput(), null)).toEqual([]);
+        expect(buildComposerContext(contextInput())).toEqual([]);
     });
 
     test('delivering captured context reproduces the composer parts exactly', () => {
         const input = contextInput({
             inlineComments: [commentDraft()],
             syntheticTexts: ['conflict note'],
-            linkedPr: { number: 7, title: 'PR', url: 'https://x/pr/7', instructions: 'pr-how', context: 'pr-diff' },
+            references: [{ kind: 'change-request', provider: 'github', number: 7, title: 'PR', url: 'https://x/pr/7', context: 'pr-diff' }],
         });
-        // The skill instruction is the one intended difference: a direct send
-        // attaches the skill to the prompt, a queued one carries the instruction.
-        const captured: QueuedContextPart[] = buildComposerContext(input, 'use: deploy');
+        const captured: QueuedContextPart[] = buildComposerContext(input);
         const direct = buildOutgoingMessage({ ...input, queued: [], composerText: 'use /deploy', composerAttachments: [] }, deps());
-        expect(queuedContextToParts(captured)).toEqual([...direct.additionalParts, { text: 'use: deploy', synthetic: true }]);
+        expect(queuedContextToParts(captured)).toEqual(direct.additionalParts);
         expect(direct.skillNames).toEqual(['deploy']);
+    });
+
+    test('a queued message sends its skills as a direct send does, so they reach the prompt as attachments', () => {
+        // The queued text is not rescanned: its skills were captured when it was queued.
+        const sent = buildOutgoingMessage(input({
+            queued: [{ text: 'use deploy', skills: ['deploy'] }, { text: 'and again', skills: ['deploy', 'review'] }],
+            composerText: 'then /lint',
+        }), deps());
+        expect(sent.skillNames).toEqual(['deploy', 'review', 'lint']);
     });
 });
 
-const chatInputSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'ChatInput.tsx'), 'utf-8');
-
-const LINKED_REFERENCE_KINDS = ['linkedIssue', 'linkedPr', 'linkedLinearIssue', 'linkedGuestIssue'];
-
-/** Lift one predicate out of the composer source: the code under test is the parameter source. */
-const gateExpression = (pattern: RegExp, what: string): string => {
-    const match = pattern.exec(chatInputSource);
-    if (!match) throw new Error('ChatInput.tsx no longer holds ' + what);
-    return match[1];
-};
-
-/** Every value in the file that is derived from all four kinds of linked reference. */
-const linkedReferenceValues = (): string[] => {
-    const names: string[] = [];
-    for (const match of chatInputSource.matchAll(/const (\w+) = ([^;\n]*);/g)) {
-        const [, name, expression] = match;
-        if (LINKED_REFERENCE_KINDS.every((kind) => expression.includes(kind))) names.push(name);
-    }
-    return names;
-};
-
-/**
- * True when a predicate counts a linked reference: it names one of the four kinds
- * directly, or it reads a value derived from all four. The assertion follows that
- * intent rather than one variable name, so inlining the value back into the
- * predicates stays green while a predicate that stops counting stays red.
- */
-const countsLinkedReference = (predicate: string): boolean =>
-    LINKED_REFERENCE_KINDS.some((kind) => predicate.includes(kind))
-    || linkedReferenceValues().some((name) => predicate.includes(name));
-
-/** The condition the builder strips linked references with, read from the builder call itself. */
-const builderStripGuard = gateExpression(/linkedIssue: !(\w+) && linkedIssue/, 'the builder strip on linked references');
-
 describe('the composer send gate counts what the submission builder counts', () => {
-    // ChatInput cannot be mounted in bun test: its import graph pulls the composer editor,
-    // Vite worker URLs and every runtime store. The gate is guarded at the source, the way
-    // the neighbouring composer regression tests guard theirs.
-    test('every predicate the composer sends with counts a linked reference', () => {
-        const gates = [
-            gateExpression(/const hasContent = ([^;\n]*);/, 'the send-button gate'),
-            gateExpression(/hasContent: (currentMessage\.trim\(\)[^,\n]*),/, 'the submit guard predicate'),
-            gateExpression(/hasContent: (options\.presetText\.trim\(\)[^,\n]*),/, 'the preset snapshot predicate'),
-        ];
-
-        for (const gate of gates) {
-            expect(countsLinkedReference(gate)).toBe(true);
-            // The builder drops the linked context in that mode, so the gate must too.
-            expect(gate).toContain(builderStripGuard);
-        }
-    });
-
-    test('the submit guard recomputes when a linked reference changes', () => {
-        expect(countsLinkedReference(gateExpression(
-            /const getCurrentInputSnapshot = React\.useCallback\(\(\) => \{([\s\S]*?)\n {4}\}, \[/,
-            'the submit guard body',
-        ))).toBe(true);
-        expect(countsLinkedReference(gateExpression(
-            /const getCurrentInputSnapshot = React\.useCallback\(\(\) => \{[\s\S]*?\n {4}\}, ([^)]*)\);/,
-            'the submit guard dependencies',
-        ))).toBe(true);
-    });
-
     test('a linked reference on its own is a message, and nothing at all is still empty', () => {
         expect(buildOutgoingMessage(input(), deps()).isEmpty).toBe(true);
 
         const onlyLinked: Partial<OutgoingMessageInput>[] = [
-            { linkedIssue: { number: 12, title: 'Attached', url: 'https://github.com/acme/app/issues/12', contextText: 'body' } },
-            { linkedPr: { number: 34, title: 'Attached', url: 'https://github.com/acme/app/pull/34', instructions: 'review', context: 'body' } },
-            { linkedLinearIssue: { identifier: 'ENG-1', title: 'Attached', url: 'https://linear.app/acme/issue/ENG-1', contextText: 'body' } },
-            { linkedGuestIssue: { providerId: 'guest.example', id: 'guest-1', title: 'Attached', url: 'https://example.com/issues/1', contextText: 'body' } },
+            { references: [{ kind: 'repository-issue', number: 12, title: 'Attached', url: 'https://github.com/acme/app/issues/12', contextText: 'body' }] },
+            { references: [{ kind: 'change-request', provider: 'github', number: 34, title: 'Attached', url: 'https://github.com/acme/app/pull/34', context: 'body' }] },
+            { references: [{ kind: 'tracker-item', provider: 'linear', identifier: 'ENG-1', title: 'Attached', url: 'https://linear.app/acme/issue/ENG-1', contextText: 'body' }] },
+            { references: [{ kind: 'guest', providerId: 'guest.example', id: 'guest-1', title: 'Attached', url: 'https://example.com/issues/1', contextText: 'body' }] },
         ];
 
         for (const linked of onlyLinked) {
@@ -519,3 +547,33 @@ describe('the composer send gate counts what the submission builder counts', () 
     });
 });
 
+
+describe('expandCommentSnippets', () => {
+    const draft = (text: string, code = 'see #review here'): InlineCommentDraft => ({
+        id: text,
+        sessionKey: 's',
+        source: 'chat-quote',
+        fileLabel: 'm1',
+        startLine: 1,
+        endLine: 1,
+        code,
+        language: '',
+        text,
+        createdAt: 0,
+    });
+    const expandText = async (text: string) => text.replace('#review', 'Review this carefully.');
+
+    test('expands the comment words and leaves the quote verbatim', async () => {
+        const [expanded] = await expandCommentSnippets([draft('#review please')], expandText);
+        expect(expanded.text).toBe('Review this carefully. please');
+        expect(expanded.code).toBe('see #review here');
+    });
+
+    test('keeps a comment as written when expansion fails', async () => {
+        const original = draft('#review please');
+        const [kept] = await expandCommentSnippets([original], async () => {
+            throw new Error('offline');
+        });
+        expect(kept).toBe(original);
+    });
+});

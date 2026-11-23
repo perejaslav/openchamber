@@ -1,5 +1,5 @@
 import type { RuntimeAPIs } from '@openchamber/ui/lib/api/types';
-import { createDesktopThemeFileAPI } from '@openchamber/ui/lib/desktop';
+import { createDesktopClipboardAPI, createDesktopThemeFileAPI } from '@openchamber/ui/lib/desktop';
 import {
   createRuntimeUrlResolver,
   getRuntimeUrlResolver,
@@ -14,11 +14,11 @@ import { createWebSettingsAPI } from './settings';
 import { createWebPermissionsAPI } from './permissions';
 import { createWebNotificationsAPI } from './notifications';
 import { createWebPushAPI } from './push';
-import { createWebGitHubAPI } from './github';
-import { createWebLinearAPI } from './linear';
+import { createWebTrackerAPI } from './trackers';
 import { createWebClientAuthAPI } from './clientAuth';
+import { createWebSourceControlAPI } from './source-control';
 
-export interface WebAPIsOptions {
+interface WebAPIsOptions {
   urls?: RuntimeUrlResolver;
 }
 
@@ -39,7 +39,8 @@ export const createWebAPIs = (options: WebAPIsOptions = {}): RuntimeAPIs => {
   const activeUrls = createActiveRuntimeUrlResolver();
 
   return {
-   themeFiles: createDesktopThemeFileAPI(),
+    clipboard: createDesktopClipboardAPI(),
+    themeFiles: createDesktopThemeFileAPI(),
   runtime: { platform: 'web', isDesktop: false, isVSCode: false, label: 'web' },
   terminal: createWebTerminalAPI(),
   git: createWebGitAPI(),
@@ -47,8 +48,8 @@ export const createWebAPIs = (options: WebAPIsOptions = {}): RuntimeAPIs => {
   settings: createWebSettingsAPI(),
   permissions: createWebPermissionsAPI(),
   notifications: createWebNotificationsAPI(),
-  github: createWebGitHubAPI({ urls: activeUrls }),
-  linear: createWebLinearAPI(),
+  sourceControl: createWebSourceControlAPI(),
+  trackers: createWebTrackerAPI(),
   push: createWebPushAPI(),
   clientAuth: createWebClientAuthAPI(),
   };
