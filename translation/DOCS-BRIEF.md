@@ -23,8 +23,11 @@ Ukrainian file when a sentence is ambiguous — it shows the intended level of p
    byte-identical, including comments, comments inside commands, and example values.
 4. **Inline code stays as-is**: `` `openchamber` ``, `` `--ui-password` ``, `` `~/.config` ``.
    Never translate or reformat what is inside backticks.
-5. **Links keep their target.** `[Install](/install/)` — the path `/install/` is identical in
-   every locale; only the link **text** is translated.
+5. **Links keep their target, and carry the locale prefix.** `[Install](/install/)` becomes
+   `[Установка](/ru/install/)`: the page name is the same in every locale, but a Russian page
+   must link inside `/ru/`, or the reader silently lands on the English page. Anchors
+   (`#установка`) are translated too, because they follow the translated heading. Check that
+   the target exists under `content/docs/ru/`.
 6. **Images keep their path.** `![alt](./images/desktop.png)` — translate only the `alt` text.
    Never translate a filename.
 7. **MDX and JSX stay valid.** `import { Image } from "astro:assets";`, `<Image src={x} alt="…" />`,
